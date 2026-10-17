@@ -218,11 +218,13 @@ __marimo__/
 .streamlit/secrets.toml
 
 
-# Environment variables
+# Environment variables & secrets
 .env
 *.env
+.env.*
+.env.local
 
-# Python
+# Python artifacts
 __pycache__/
 *.py[cod]
 *$py.class
@@ -233,3 +235,14 @@ env/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Project exports & backup dumps
+backup_*.json
+*.dump
+*.bak
+
+# IDE & Editor configs
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
