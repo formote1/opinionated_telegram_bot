@@ -20,7 +20,7 @@ from database import (
 )
 from utils.helpers import extract_file_data
 from utils.sentinel import log_event, notify_admin
-from services.tmdb import fetch_tmdb_metadata
+from services.tmdb import fetch_tmdb_metadata, clean_title_for_search
 
 
 def parse_duration(d_str: str) -> float | None:
@@ -37,37 +37,63 @@ def parse_duration(d_str: str) -> float | None:
 
 
 async def admin_palette_msg():
-    # Counts for quick summary metrics
-    r_c = await reminders_col.count_documents({}) if reminders_col is not None else 0
-    c_c = await codes_col.count_documents({}) if codes_col is not None else 0
-    k_c = await group_keys_col.count_documents({}) if group_keys_col is not None else 0
-    u_c = await users_col.count_documents({}) if users_col is not None else 0
-
     keyboard = [
         [
-            InlineKeyboardButton("🗄️ Media & Catalog", callback_data="pal_cat_media"),
-            InlineKeyboardButton("🔐 Access & Security", callback_data="pal_cat_security")
-        ],
-        [
-            InlineKeyboardButton("⏰ Reminders & Schedules", callback_data="pal_cat_reminders"),
-            InlineKeyboardButton("📈 Audits & System", callback_data="pal_cat_system")
-        ],
-        [
             InlineKeyboardButton("📊 System Stats", callback_data="pal_stats"),
-            InlineKeyboardButton("📋 Activity Logs", callback_data="pal_logs")
+            InlineKeyboardButton("📦 Export Data", callback_data="pal_export")
+        ],
+        [
+            InlineKeyboardButton("📜 All Reminders", callback_data="pal_alllists"),
+            InlineKeyboardButton("🗝️ Key Matrix", callback_data="pal_keys")
+        ],
+        [
+            InlineKeyboardButton("👥 Access Matrix", callback_data="pal_access"),
+            InlineKeyboardButton("📋 System Logs", callback_data="pal_logs")
+        ],
+        [
+            InlineKeyboardButton("🗑️ Manage DB", callback_data="pal_manage"),
+            InlineKeyboardButton("🔄 Sync Metadata", callback_data="pal_sync")
         ]
     ]
 
     text = (
-        "👑 **MASTER ADMIN CONSOLE**\n"
-        "─────────────────────────────────\n"
-        "⚡ **System Status:** 🌐 Operational\n"
-        f"📦 **Assets:** `{c_c:03d}` | ⏰ **Reminders:** `{r_c:03d}`\n"
-        f"🔐 **Locked Prefixes:** `{k_c:02d}` | 👤 **Users:** `{u_c:03d}`\n"
-        "─────────────────────────────────\n"
-        "Select a management category below:"
+        "👑 **MASTER CONSOLE (Ultimate Master)**\n"
+        "───────────────────────\n"
+        "System Status: 🌐 Operational\n"
+        "───────────────────────\n"
+        "📜 COMPLETE COMMAND LIST:\n\n"
+        "Core Commands:\n"
+        "• `/start` / `/admin` - Dashboard\n"
+        "• `/remind` - Setup countdown (GUI)\n"
+        "• `/list` - View reminders\n"
+        "• `/ascii` - Text to ASCII art\n\n"
+        "Access Management:\n"
+        "• `/grant USER_ID PREFIX [DURATION]` - Grant media access (e.g. 24h, 7d)\n"
+        "• `/revoke USER_ID PREFIX` - Remove media access\n"
+        "• `/freeze USER_ID PREFIX` - Suspend media access\n"
+        "• `/unfreeze USER_ID PREFIX` - Restore media access\n\n"
+        "Database Matrix:\n"
+        "• `/save CODE` - Index by reply\n"
+        "• `/autobulk START END PREFIX` - Mass index\n"
+        "• `/del CODE` - Single file delete\n"
+        "• `/del PREFIX START END` - Surgical range delete\n"
+        "• `/setkey PREFIX PASSWORD` - Secure prefix partition\n"
+        "• `/setlabel PREFIX CAT TITLE` - Assign title, category & TMDB sync\n"
+        "• `/setseason PREFIX SN START END` - Map season range\n"
+        "• `/delseason PREFIX SN` - Delete specific season\n"
+        "• `/clearseasons PREFIX` - Wipe all seasons\n"
+        "• `/rename_prefix OLD NEW` - Bulk migrate prefix\n"
+        "• `/refresh` - Sync files and TMDB metadata\n\n"
+        "File Retrieval Engine:\n"
+        "• `/get CODE` - Fetch specific asset\n"
+        "• `/get PREFIX START END` - Sequential range delivery\n\n"
+        "Monitoring:\n"
+        "• `/stats` - Live system audit report\n"
+        "• `/export` - Database JSON backup\n"
+        "───────────────────────"
     )
     return text, InlineKeyboardMarkup(keyboard)
+
 
 
 async def show_admin_media_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -513,7 +539,7 @@ async def manage_db_gui(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text("Database empty.")
         return
     keyboard = [[InlineKeyboardButton(f"🔥 Wipe {p['_id']} ({p['count']} items)", callback_data=f"pref_wipe_{p['_id']}")] for p in prefixes]
-    keyboard.append([InlineKeyboardButton("🔙 Back to Console", callback_data="pal_stats")])
+    keyboard.append([InlineKeyboardButton("🔙 Back to Console", callback_data="pal_home")])
     await update.effective_message.reply_text("🗑️ **NUKE SELECTOR**\nChoose prefix to vaporize:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 
@@ -609,7 +635,7 @@ async def rename_prefix(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def refresh_metadata(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Syncs missing Telegram file metadata and enriches titles with TMDB movie/TV metadata."""
+    """Syncs missing Telegram file metadata and enriches all existing files & prefix labels with full TMDB metadata."""
     if update.effective_user.id != ADMIN_ID or codes_col is None: return
     status_msg = await update.effective_message.reply_text("🔄 **Full System Sync Initiated**\nChecking file metadata & TMDB...", parse_mode="Markdown")
     
@@ -635,27 +661,85 @@ async def refresh_metadata(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.warning(f"File probe failed for {record.get('code')}: {e}")
                 continue
 
-    # 2. Sync / enrich TMDB metadata for all prefix labels
-    tmdb_sync_count = 0
+    # 2. Discover unmapped prefixes from existing files in codes_col
+    auto_discovered_count = 0
     if prefix_labels_col is not None:
-        async for label_doc in prefix_labels_col.find({}):
+        try:
+            distinct_codes = await codes_col.distinct("code")
+            unique_prefixes = sorted(list(set(c[:3].upper() for c in distinct_codes if c and len(c) >= 3)))
+            for pfx in unique_prefixes:
+                existing_doc = await prefix_labels_col.find_one({"prefix": pfx})
+                if not existing_doc:
+                    sample_file = await codes_col.find_one({"code": {"$regex": f"^{re.escape(pfx)}"}})
+                    raw_title = ""
+                    if sample_file:
+                        raw_title = sample_file.get("file_name") or sample_file.get("caption") or ""
+                    cleaned = clean_title_for_search(raw_title) or pfx
+                    is_series = bool(re.search(r's\d+|season|ep\d+|episode', raw_title, re.IGNORECASE))
+                    cat = "series" if is_series else "movie"
+                    tmdb_info = await fetch_tmdb_metadata(cleaned, cat)
+                    new_label = {
+                        "prefix": pfx,
+                        "name": (tmdb_info.get("title") if tmdb_info else cleaned) or pfx,
+                        "category": cat,
+                        "seasons": []
+                    }
+                    if tmdb_info:
+                        new_label["tmdb"] = tmdb_info
+                    await prefix_labels_col.update_one({"prefix": pfx}, {"$set": new_label}, upsert=True)
+                    auto_discovered_count += 1
+                    await asyncio.sleep(0.2)
+        except Exception as e:
+            logger.warning(f"Prefix auto-discovery error during sync: {e}")
+
+    # 3. Comprehensive TMDB metadata enrichment for ALL existing titles/prefixes
+    tmdb_sync_count = 0
+    total_labels = 0
+    if prefix_labels_col is not None:
+        total_labels = await prefix_labels_col.count_documents({})
+        label_cursor = prefix_labels_col.find({})
+        processed = 0
+        async for label_doc in label_cursor:
+            processed += 1
             name = label_doc.get("name")
             cat = label_doc.get("category", "movie")
-            if name and "tmdb" not in label_doc:
+            
+            # Fetch / refresh TMDB metadata (banner, poster, backdrop, overview, rating)
+            if name:
                 tmdb_info = await fetch_tmdb_metadata(name, cat)
-                if tmdb_info:
-                    await prefix_labels_col.update_one({"_id": label_doc["_id"]}, {"$set": {"tmdb": tmdb_info}})
-                    tmdb_sync_count += 1
-                    await asyncio.sleep(0.2)
+                if not tmdb_info:
+                    cleaned_name = clean_title_for_search(name)
+                    if cleaned_name and cleaned_name.lower() != name.lower():
+                        tmdb_info = await fetch_tmdb_metadata(cleaned_name, cat)
 
-    await status_msg.edit_text(
-        f"✅ **Sync Finalized!**\n"
-        f"• Files updated: `{file_sync_count}`\n"
-        f"• TMDB titles enriched: `{tmdb_sync_count}`",
-        parse_mode="Markdown"
-    )
+                if tmdb_info:
+                    update_data = {"tmdb": tmdb_info}
+                    # If existing name was just the prefix code, replace with official title
+                    if name == label_doc.get("prefix") and tmdb_info.get("title"):
+                        update_data["name"] = tmdb_info["title"]
+                    await prefix_labels_col.update_one({"_id": label_doc["_id"]}, {"$set": update_data})
+                    tmdb_sync_count += 1
+
+                if (processed % 3 == 0) or processed == total_labels:
+                    await status_msg.edit_text(
+                        f"🔄 **Syncing TMDB Metadata...**\n"
+                        f"`{processed}/{total_labels}` titles evaluated.\n"
+                        f"Enriched: `{tmdb_sync_count}`",
+                        parse_mode="Markdown"
+                    )
+                await asyncio.sleep(0.25)
+
+    summary_lines = [
+        "✅ **Sync Finalized!**",
+        f"• Files probed/updated: `{file_sync_count}`",
+        f"• Existing titles enriched with TMDB: `{tmdb_sync_count}`",
+    ]
+    if auto_discovered_count > 0:
+        summary_lines.append(f"• New prefixes auto-discovered: `{auto_discovered_count}`")
+
+    await status_msg.edit_text("\n".join(summary_lines), parse_mode="Markdown")
     await log_event(ADMIN_ID, "ADMIN", f"Metadata Sync: {file_sync_count} files, {tmdb_sync_count} TMDB records")
-    await notify_admin(context, f"📊 Metadata Sync complete. `{file_sync_count}` files and `{tmdb_sync_count}` TMDB records updated.")
+    await notify_admin(context, f"📊 Metadata Sync complete. `{file_sync_count}` files and `{tmdb_sync_count}` TMDB records enriched.")
 
 
 async def auto_bulk_register(update: Update, context: ContextTypes.DEFAULT_TYPE):
