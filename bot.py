@@ -39,24 +39,9 @@ from handlers.admin import (
     export_data,
     manage_db_gui,
     handle_manage_callback,
-    range_delete,
-    save_message,
-    auto_bulk_register,
-    refresh_metadata,
-    set_group_key,
-    unset_group_key,
-    set_prefix_label,
-    delete_prefix_label,
-    set_tmdb_metadata,
-    delete_tmdb_metadata,
-    set_season_mapping,
-    delete_season_mapping,
-    clear_all_seasons,
-    rename_prefix,
-    grant_access_command,
-    revoke_access_command,
-    freeze_access_command,
-    unfreeze_access_command,
+    user_command_router,
+    file_command_router,
+    media_command_router,
     weekly_backup_job,
 )
 from services.ascii_art import ascii_command_handler
@@ -88,26 +73,9 @@ def create_application():
     # --- Admin & Management Handlers ---
     app.add_handler(CommandHandler("stats", get_stats))
     app.add_handler(CommandHandler("export", export_data))
-    app.add_handler(CommandHandler("save", save_message))
-    app.add_handler(CommandHandler("del", range_delete))
-    app.add_handler(CommandHandler("autobulk", auto_bulk_register))
-    app.add_handler(CommandHandler("refresh", refresh_metadata))
-    app.add_handler(CommandHandler("setkey", set_group_key))
-    app.add_handler(CommandHandler("unsetkey", unset_group_key))
-    app.add_handler(CommandHandler("delkey", unset_group_key))
-    app.add_handler(CommandHandler("setlabel", set_prefix_label))
-    app.add_handler(CommandHandler("dellabel", delete_prefix_label))
-    app.add_handler(CommandHandler("unsetlabel", delete_prefix_label))
-    app.add_handler(CommandHandler("tmdb", set_tmdb_metadata))
-    app.add_handler(CommandHandler("deltmdb", delete_tmdb_metadata))
-    app.add_handler(CommandHandler("setseason", set_season_mapping))
-    app.add_handler(CommandHandler("delseason", delete_season_mapping))
-    app.add_handler(CommandHandler("clearseasons", clear_all_seasons))
-    app.add_handler(CommandHandler("rename_prefix", rename_prefix))
-    app.add_handler(CommandHandler("grant", grant_access_command))
-    app.add_handler(CommandHandler("revoke", revoke_access_command))
-    app.add_handler(CommandHandler("freeze", freeze_access_command))
-    app.add_handler(CommandHandler("unfreeze", unfreeze_access_command))
+    app.add_handler(CommandHandler("user", user_command_router))
+    app.add_handler(CommandHandler("file", file_command_router))
+    app.add_handler(CommandHandler("media", media_command_router))
     app.add_handler(CallbackQueryHandler(handle_palette_callback, pattern="^pal_"))
     app.add_handler(CallbackQueryHandler(manage_db_gui, pattern="^pal_manage$"))
     app.add_handler(CallbackQueryHandler(handle_manage_callback, pattern="^pref_wipe_"))

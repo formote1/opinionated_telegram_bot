@@ -10,7 +10,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await save_user_info(user)
     if user.id == ADMIN_ID:
         text, markup = await admin_palette_msg()
-        await update.message.reply_text(text, reply_markup=markup, parse_mode="Markdown")
+        await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
     else:
-        greet = "👋 **Welcome.**\n\n⏰ /remind - Set countdown\n📜 /list - Reminders\n📦 /get - Library\n🎨 /ascii - Art\n\n© **NurAziz**"
-        await update.message.reply_text(greet, parse_mode="Markdown")
+        greet = "👋 <b>Welcome.</b>\n\n⏰ /remind - Set countdown\n📜 /list - Reminders\n📦 /get - Library\n🎨 /ascii - Art\n\n© <b>NurAziz</b>"
+        await update.message.reply_text(greet, parse_mode="HTML")

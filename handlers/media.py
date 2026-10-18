@@ -103,13 +103,17 @@ async def handle_library_pick(update: Update, context: ContextTypes.DEFAULT_TYPE
     # TMDB metadata (only if handpicked and explicitly attached by admin)
     tmdb = label_rec.get("tmdb") if label_rec else None
 
-    # Format TMDB official poster & rich overview
+    # Format TMDB official poster / backdrop banner & rich overview
     banner_img_url = ""
     header_parts = []
     cat_icon = "🎬" if cat == "movie" else "📺"
 
     if tmdb:
-        banner_img_url = tmdb.get("poster_url") or tmdb.get("banner_url") or ""
+        banner_mode = label_rec.get("banner_mode", "poster") if label_rec else "poster"
+        if banner_mode == "backdrop":
+            banner_img_url = tmdb.get("backdrop_url") or tmdb.get("poster_url") or ""
+        else:
+            banner_img_url = tmdb.get("poster_url") or tmdb.get("backdrop_url") or ""
         title_display = tmdb.get("title") or name
         year_display = f" ({tmdb['year']})" if tmdb.get("year") else ""
         header_parts.append(f"{cat_icon} **{title_display}**{year_display}")
@@ -168,7 +172,11 @@ async def handle_season_pick(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not season_obj: return await query.answer("Error.")
 
     tmdb = label_rec.get("tmdb") if label_rec else None
-    banner_img_url = (tmdb.get("poster_url") or tmdb.get("banner_url")) if tmdb else ""
+    banner_mode = label_rec.get("banner_mode", "poster") if label_rec else "poster"
+    if tmdb:
+        banner_img_url = (tmdb.get("backdrop_url") or tmdb.get("poster_url") or "") if banner_mode == "backdrop" else (tmdb.get("poster_url") or tmdb.get("backdrop_url") or "")
+    else:
+        banner_img_url = ""
     banner_prefix = f"[\u200b]({banner_img_url})\n" if banner_img_url else ""
     rating_str = f" ⭐ `{tmdb['rating']}/10`" if tmdb and tmdb.get("rating") else ""
     season_header = f"{banner_prefix}📺 **{name}** — Season {sn_num}{rating_str}\n\nSelect episode to download:"

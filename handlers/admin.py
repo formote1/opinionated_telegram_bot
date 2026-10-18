@@ -57,42 +57,59 @@ async def admin_palette_msg():
     ]
 
     text = (
-        "👑 **MASTER CONSOLE (Ultimate Master)**\n"
+        "👑 <b>MASTER CONSOLE (Ultimate Master)</b>\n"
         "───────────────────────\n"
         "System Status: 🌐 Operational\n"
         "───────────────────────\n"
-        "📜 COMPLETE COMMAND LIST:\n\n"
-        "Core Commands:\n"
-        "• `/start` / `/admin` - Dashboard\n"
-        "• `/remind` - Setup countdown (GUI)\n"
-        "• `/list` - View reminders\n"
-        "• `/ascii` - Text to ASCII art\n\n"
-        "Access Management:\n"
-        "• `/grant USER_ID PREFIX [DURATION]` - Grant media access (e.g. 24h, 7d)\n"
-        "• `/revoke USER_ID PREFIX` - Remove media access\n"
-        "• `/freeze USER_ID PREFIX` - Suspend media access\n"
-        "• `/unfreeze USER_ID PREFIX` - Restore media access\n\n"
-        "Database Matrix:\n"
-        "• `/save CODE` - Index by reply\n"
-        "• `/autobulk START END PREFIX` - Mass index\n"
-        "• `/del CODE` - Single file delete\n"
-        "• `/del PREFIX START END` - Surgical range delete\n"
-        "• `/setkey PREFIX PASSWORD` - Secure prefix partition\n"
-        "• `/setlabel PREFIX CAT TITLE` - Assign title & category\n"
-        "• `/dellabel PREFIX` - Remove title & category partition\n"
-        "• `/tmdb PREFIX QUERY/ID` - Fetch & link TMDB metadata\n"
-        "• `/deltmdb PREFIX` - Unlink TMDB metadata\n"
-        "• `/setseason PREFIX SN START END` - Map season range\n"
-        "• `/delseason PREFIX SN` - Delete specific season\n"
-        "• `/clearseasons PREFIX` - Wipe all seasons\n"
-        "• `/rename_prefix OLD NEW` - Bulk migrate prefix\n"
-        "• `/refresh` - Sync files and TMDB metadata\n\n"
-        "File Retrieval Engine:\n"
-        "• `/get CODE` - Fetch specific asset\n"
-        "• `/get PREFIX START END` - Sequential range delivery\n\n"
-        "Monitoring:\n"
-        "• `/stats` - Live system audit report\n"
-        "• `/export` - Database JSON backup\n"
+        "📜 <b>COMPLETE COMMAND LIST:</b>\n\n"
+        "<blockquote expandable>\n"
+        "<b>Core Commands:</b>\n"
+        "• <code>/start</code> / <code>/admin</code> - Dashboard\n"
+        "• <code>/remind</code> - Setup countdown (GUI)\n"
+        "• <code>/list</code> - View reminders\n"
+        "• <code>/ascii</code> - Text to ASCII art\n"
+        "</blockquote>\n\n"
+        "<blockquote expandable>\n"
+        "<b>Access Management:</b>\n"
+        "• <code>/user grant &lt;USER_ID|@username&gt; &lt;PREFIX|0&gt; [DURATION]</code>\n"
+        "• <code>/user revoke &lt;USER_ID|@username&gt; &lt;PREFIX|0&gt;</code>\n"
+        "• <code>/user freeze &lt;USER_ID|@username&gt; [PREFIX|0] [DURATION]</code>\n"
+        "• <code>/user unfreeze &lt;USER_ID|@username&gt; [PREFIX|0]</code>\n"
+        "• <code>/user ban &lt;USER_ID|@username&gt;</code>\n"
+        "• <code>/user unban &lt;USER_ID|@username&gt;</code>\n"
+        "</blockquote>\n\n"
+        "<blockquote expandable>\n"
+        "<b>File Storage Engine:</b>\n"
+        "• <code>/file save PREFIX</code> - Index replied file (auto 001)\n"
+        "• <code>/file save PREFIX START END</code> - Forward mass index\n"
+        "• <code>/file del CODE</code> - Delete single asset\n"
+        "• <code>/file del PREFIX START END</code> - Surgical range delete\n"
+        "• <code>/file lock PREFIX PASSWORD</code> - Secure partition with passkey\n"
+        "• <code>/file unlock PREFIX</code> - Remove passkey partition\n"
+        "• <code>/file mv OLD NEW</code> - Bulk migrate/rename prefix\n"
+        "</blockquote>\n\n"
+        "<blockquote expandable>\n"
+        "<b>Media & Catalog:</b>\n"
+        "• <code>/media label set PREFIX CAT TITLE</code> - Set title & category\n"
+        "• <code>/media label del PREFIX</code> - Remove partition label\n"
+        "• <code>/media tmdb set PREFIX QUERY/ID</code> - Link TMDB metadata\n"
+        "• <code>/media tmdb del PREFIX</code> - Unlink TMDB metadata\n"
+        "• <code>/media banner PREFIX toggle</code> - Flip poster / backdrop\n"
+        "• <code>/media season set PREFIX SN START END</code> - Map season range\n"
+        "• <code>/media season del PREFIX SN</code> - Delete specific season\n"
+        "• <code>/media season clear PREFIX</code> - Wipe all seasons\n"
+        "• <code>/media refresh</code> - Sync files & refresh TMDB\n"
+        "</blockquote>\n\n"
+        "<blockquote expandable>\n"
+        "<b>File Retrieval Engine:</b>\n"
+        "• <code>/get CODE</code> - Fetch specific asset\n"
+        "• <code>/get PREFIX START END</code> - Sequential range delivery\n"
+        "</blockquote>\n\n"
+        "<blockquote expandable>\n"
+        "<b>Monitoring & Backup:</b>\n"
+        "• <code>/stats</code> - Live system audit report\n"
+        "• <code>/export</code> - Database JSON backup\n"
+        "</blockquote>\n"
         "───────────────────────"
     )
     return text, InlineKeyboardMarkup(keyboard)
@@ -101,19 +118,18 @@ async def admin_palette_msg():
 
 async def show_admin_media_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        "🗄️ **MEDIA & CATALOG MANAGEMENT**\n"
+        "🗄️ <b>MEDIA & CATALOG MANAGEMENT</b>\n"
         "─────────────────────────────────\n"
-        "**Available Commands:**\n"
-        "• `/save <CODE>` — Index single media by reply\n"
-        "• `/autobulk <START> <END> <PREFIX>` — Mass forward index\n"
-        "• `/del <CODE>` — Single file delete\n"
-        "• `/del <PREFIX> <START> <END>` — Surgical range delete\n"
-        "• `/setlabel <PREFIX> <MOVIE|SERIES> <TITLE>` — Assign title & TMDB sync\n"
-        "• `/setseason <PREFIX> <SN> <START> <END>` — Map season episode range\n"
-        "• `/delseason <PREFIX> <SN>` — Delete specific season\n"
-        "• `/clearseasons <PREFIX>` — Clear all mapped seasons\n"
-        "• `/rename_prefix <OLD> <NEW>` — Bulk migrate prefix\n"
-        "• `/refresh` — Sync files & fetch missing TMDB metadata\n"
+        "<b>Available Commands:</b>\n"
+        "• <code>/media label set PREFIX CAT TITLE</code> — Handpick title & category\n"
+        "• <code>/media label del PREFIX</code> — Remove partition label\n"
+        "• <code>/media tmdb set PREFIX QUERY/ID</code> — Link TMDB metadata\n"
+        "• <code>/media tmdb del PREFIX</code> — Unlink TMDB metadata\n"
+        "• <code>/media banner PREFIX toggle</code> — Flip poster / backdrop\n"
+        "• <code>/media season set PREFIX SN START END</code> — Map season episode range\n"
+        "• <code>/media season del PREFIX SN</code> — Delete specific season\n"
+        "• <code>/media season clear PREFIX</code> — Clear all mapped seasons\n"
+        "• <code>/media refresh</code> — Sync files & refresh TMDB\n"
         "─────────────────────────────────"
     )
     keyboard = [
@@ -121,22 +137,24 @@ async def show_admin_media_menu(update: Update, context: ContextTypes.DEFAULT_TY
         [InlineKeyboardButton("🔙 Back to Main Console", callback_data="pal_home")]
     ]
     if update.callback_query:
-        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
     else:
-        await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 
 async def show_admin_security_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        "🔐 **ACCESS & SECURITY MANAGEMENT**\n"
+        "🔐 <b>ACCESS & SECURITY MANAGEMENT</b>\n"
         "─────────────────────────────────\n"
-        "**Available Commands:**\n"
-        "• `/setkey <PREFIX> <PASSWORD>` — Lock prefix behind a passkey partition\n"
-        "• `/unsetkey <PREFIX>` — Remove passkey partition completely\n"
-        "• `/grant <USER_ID> <PREFIX> [DURATION]` — Grant media access (e.g. `24h`, `7d`)\n"
-        "• `/revoke <USER_ID> <PREFIX>` — Completely remove media access\n"
-        "• `/freeze <USER_ID> <PREFIX>` — Temporarily suspend access\n"
-        "• `/unfreeze <USER_ID> <PREFIX>` — Restore suspended access\n"
+        "<b>Available Commands:</b>\n"
+        "• <code>/file lock PREFIX PASSWORD</code> — Lock prefix with passkey partition\n"
+        "• <code>/file unlock PREFIX</code> — Remove passkey partition\n"
+        "• <code>/user grant &lt;USER_ID|@username&gt; &lt;PREFIX|0&gt; [DURATION]</code>\n"
+        "• <code>/user revoke &lt;USER_ID|@username&gt; &lt;PREFIX|0&gt;</code>\n"
+        "• <code>/user freeze &lt;USER_ID|@username&gt; [PREFIX|0] [DURATION]</code>\n"
+        "• <code>/user unfreeze &lt;USER_ID|@username&gt; [PREFIX|0]</code>\n"
+        "• <code>/user ban &lt;USER_ID|@username&gt;</code>\n"
+        "• <code>/user unban &lt;USER_ID|@username&gt;</code>\n"
         "─────────────────────────────────"
     )
     keyboard = [
@@ -144,9 +162,9 @@ async def show_admin_security_menu(update: Update, context: ContextTypes.DEFAULT
         [InlineKeyboardButton("🔙 Back to Main Console", callback_data="pal_home")]
     ]
     if update.callback_query:
-        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
     else:
-        await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 
 async def show_admin_reminders_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -202,7 +220,7 @@ async def handle_palette_callback(update: Update, context: ContextTypes.DEFAULT_
 
     if action == "home":
         text, markup = await admin_palette_msg()
-        await query.edit_message_text(text, reply_markup=markup, parse_mode="Markdown")
+        await query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
     elif action == "cat":
         sub = parts[2]
         if sub == "media":
@@ -304,10 +322,11 @@ async def get_access_matrix(update: Update, context: ContextTypes.DEFAULT_TYPE):
             report.append(f"• <b>{html.escape(uname)}</b> (<code>{u_id}</code>):\n  " + ", ".join(prefix_statuses))
             
         report.append("\n<b>Admin Commands:</b>\n"
-                      "• <code>/grant &lt;USER_ID&gt; &lt;PREFIX&gt; [DURATION]</code>\n"
-                      "• <code>/revoke &lt;USER_ID&gt; &lt;PREFIX&gt;</code>\n"
-                      "• <code>/freeze &lt;USER_ID&gt; &lt;PREFIX&gt;</code>\n"
-                      "• <code>/unfreeze &lt;USER_ID&gt; &lt;PREFIX&gt;</code>")
+                      "• <code>/user grant &lt;USER_ID|@username&gt; &lt;PREFIX|0&gt; [DURATION]</code>\n"
+                      "• <code>/user revoke &lt;USER_ID|@username&gt; &lt;PREFIX|0&gt;</code>\n"
+                      "• <code>/user freeze &lt;USER_ID|@username&gt; [PREFIX|0] [DURATION]</code>\n"
+                      "• <code>/user unfreeze &lt;USER_ID|@username&gt; [PREFIX|0]</code>\n"
+                      "• <code>/user ban &lt;USER_ID|@username&gt;</code>")
         
         await update.effective_message.reply_text("\n".join(report), parse_mode="HTML")
     except Exception as e:
@@ -315,76 +334,116 @@ async def get_access_matrix(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text("❌ Failed to retrieve access matrix.")
 
 
-async def grant_access_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin command to grant permanent or time-limited access to a prefix for a specific user."""
-    if update.effective_user.id != ADMIN_ID or unlocked_groups_col is None: return
+async def resolve_target_user(identifier: str) -> tuple[int | None, str]:
+    """Resolves a numeric user ID or @username into (user_id, display_name)."""
+    identifier = identifier.strip()
+    if identifier.startswith("@"):
+        uname = identifier[1:]
+        if users_col is not None:
+            doc = await users_col.find_one({"username": {"$regex": f"^{re.escape(uname)}$", "$options": "i"}})
+            if doc:
+                return doc.get("user_id"), f"@{doc.get('username')}"
+        return None, identifier
+    if identifier.isdigit():
+        uid = int(identifier)
+        doc = await users_col.find_one({"user_id": uid}) if users_col is not None else None
+        uname = f"@{doc['username']}" if (doc and doc.get("username")) else f"User {uid}"
+        return uid, uname
+    return None, identifier
+
+
+async def user_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Unified user access and moderation router: /user grant|revoke|freeze|unfreeze|ban|unban"""
+    if update.effective_user.id != ADMIN_ID or unlocked_groups_col is None:
+        return
     args = context.args or []
-    if len(args) < 2:
-        return await update.message.reply_text("❌ Usage: `/grant USER_ID PREFIX [DURATION]`\nExample durations: `24h`, `7d`, `30m`", parse_mode="Markdown")
-    try:
-        target_user_id = int(args[0])
-        prefix = args[1].upper().strip()[:3]
-        
-        expires_at = None
-        duration_note = "Permanent"
-        if len(args) >= 3:
-            expires_at = parse_duration(args[2])
-            if expires_at:
-                duration_note = f"Expires in {args[2]}"
-            else:
-                return await update.message.reply_text("❌ Invalid duration. Use format like `24h`, `7d`, or `30m`.")
-        
-        key_record = await group_keys_col.find_one({"prefix": prefix}) if group_keys_col is not None else None
-        chat_id = key_record["chat_id"] if key_record else update.effective_chat.id
-        auth_key = f"{chat_id}_{prefix}"
-        
-        update_op = {
-            "$addToSet": {"unlocked_prefixes": auth_key},
-            "$pull": {"frozen_prefixes": auth_key}
-        }
-        if expires_at:
-            update_op["$set"] = {f"prefix_expirations.{auth_key}": expires_at}
-        else:
-            update_op["$unset"] = {f"prefix_expirations.{auth_key}": ""}
-            
-        await unlocked_groups_col.update_one(
-            {"user_id": target_user_id},
-            update_op,
-            upsert=True
+    if not args:
+        help_text = (
+            "👤 <b>USER ACCESS MANAGEMENT</b>\n\n"
+            "• <code>/user grant &lt;USER_ID|@username&gt; &lt;PREFIX|0&gt; [DURATION]</code>\n"
+            "• <code>/user revoke &lt;USER_ID|@username&gt; &lt;PREFIX|0&gt;</code>\n"
+            "• <code>/user freeze &lt;USER_ID|@username&gt; [PREFIX|0] [DURATION]</code>\n"
+            "• <code>/user unfreeze &lt;USER_ID|@username&gt; [PREFIX|0]</code>\n"
+            "• <code>/user ban &lt;USER_ID|@username&gt;</code>\n"
+            "• <code>/user unban &lt;USER_ID|@username&gt;</code>\n\n"
+            "<i>Note: Passing 0 targets all locked partitions.</i>"
         )
-        await update.message.reply_text(f"✅ Granted access to `{prefix}` for user `{target_user_id}` ({duration_note}).", parse_mode="Markdown")
-        await log_event(ADMIN_ID, "ADMIN", f"Granted {prefix} to {target_user_id} ({duration_note})")
-        await notify_admin(context, f"👥 Admin granted `{prefix}` access to `{target_user_id}` ({duration_note}).")
-    except ValueError:
-        await update.message.reply_text("❌ USER_ID must be a numeric integer.")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {e}")
+        return await update.message.reply_text(help_text, parse_mode="HTML")
 
+    sub = args[0].lower()
 
-async def revoke_access_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin command to completely revoke access to a prefix for a specific user."""
-    if update.effective_user.id != ADMIN_ID or unlocked_groups_col is None: return
-    args = context.args or []
-    if len(args) < 2:
-        return await update.message.reply_text("❌ Usage: `/revoke USER_ID PREFIX`", parse_mode="Markdown")
-    try:
-        target_user_id = int(args[0])
-        prefix = args[1].upper().strip()[:3]
-        
-        user_rec = await unlocked_groups_col.find_one({"user_id": target_user_id})
+    # Handle syntax like /user grant revoke ...
+    if sub == "grant" and len(args) > 1 and args[1].lower() in ["revoke", "freeze", "unfreeze"]:
+        sub = args[1].lower()
+        args = [sub] + args[2:]
+
+    if sub == "grant":
+        if len(args) < 3:
+            return await update.message.reply_text("❌ Usage: <code>/user grant &lt;USER_ID|@username&gt; &lt;PREFIX|0&gt; [DURATION]</code>", parse_mode="HTML")
+        uid, uname = await resolve_target_user(args[1])
+        if not uid:
+            return await update.message.reply_text(f"❌ User <code>{args[1]}</code> not found in database.", parse_mode="HTML")
+        target_prefix = args[2].upper().strip()
+        duration_str = args[3] if len(args) > 3 else None
+        expires_at = parse_duration(duration_str) if duration_str else None
+        duration_note = f"expires in {duration_str}" if expires_at else "Permanent"
+
+        if target_prefix == "0":
+            cursor = group_keys_col.find({}) if group_keys_col is not None else []
+            keys_to_add = [f"{doc['chat_id']}_{doc['prefix']}" async for doc in cursor]
+            if not keys_to_add:
+                return await update.message.reply_text("ℹ️ No locked partitions currently exist.")
+            update_op = {
+                "$addToSet": {"unlocked_prefixes": {"$each": keys_to_add}},
+                "$pull": {"frozen_prefixes": {"$each": keys_to_add}}
+            }
+            if expires_at:
+                update_op["$set"] = {f"prefix_expirations.{k}": expires_at for k in keys_to_add}
+            await unlocked_groups_col.update_one({"user_id": uid}, update_op, upsert=True)
+            await update.message.reply_text(f"✅ Granted access to <b>ALL locked partitions</b> ({len(keys_to_add)}) for {uname} ({duration_note}).", parse_mode="HTML")
+            await log_event(ADMIN_ID, "ADMIN", f"Granted ALL to {uid} ({duration_note})")
+            await notify_admin(context, f"👥 Granted ALL partitions to {uname} ({duration_note}).")
+        else:
+            pfx = target_prefix[:3]
+            gate = await group_keys_col.find_one({"prefix": pfx}) if group_keys_col is not None else None
+            chat_id = gate["chat_id"] if gate else update.effective_chat.id
+            auth_key = f"{chat_id}_{pfx}"
+            update_op = {
+                "$addToSet": {"unlocked_prefixes": auth_key},
+                "$pull": {"frozen_prefixes": auth_key}
+            }
+            if expires_at:
+                update_op["$set"] = {f"prefix_expirations.{auth_key}": expires_at}
+            await unlocked_groups_col.update_one({"user_id": uid}, update_op, upsert=True)
+            await update.message.reply_text(f"✅ Granted access to <code>{pfx}</code> for {uname} ({duration_note}).", parse_mode="HTML")
+            await log_event(ADMIN_ID, "ADMIN", f"Granted {pfx} to {uid} ({duration_note})")
+            await notify_admin(context, f"👥 Granted `{pfx}` to {uname} ({duration_note}).")
+
+    elif sub == "revoke":
+        if len(args) < 3:
+            return await update.message.reply_text("❌ Usage: <code>/user revoke &lt;USER_ID|@username&gt; &lt;PREFIX|0&gt;</code>", parse_mode="HTML")
+        uid, uname = await resolve_target_user(args[1])
+        if not uid:
+            return await update.message.reply_text(f"❌ User <code>{args[1]}</code> not found.", parse_mode="HTML")
+        target_prefix = args[2].upper().strip()
+        user_rec = await unlocked_groups_col.find_one({"user_id": uid})
         if not user_rec:
-            return await update.message.reply_text(f"❌ User `{target_user_id}` has no access records.")
-            
+            return await update.message.reply_text(f"❌ {uname} has no access records.", parse_mode="HTML")
+
         unlocked = user_rec.get("unlocked_prefixes", [])
         frozen = user_rec.get("frozen_prefixes", [])
-        
-        matched_keys = [k for k in (unlocked + frozen) if k.endswith(f"_{prefix}") or k == prefix]
+        if target_prefix == "0":
+            matched_keys = list(set(unlocked + frozen))
+        else:
+            pfx = target_prefix[:3]
+            matched_keys = [k for k in (unlocked + frozen) if k.endswith(f"_{pfx}") or k == pfx]
+
         if not matched_keys:
-            return await update.message.reply_text(f"❌ User `{target_user_id}` does not have access to `{prefix}`.")
-            
+            return await update.message.reply_text(f"❌ {uname} has no matching access to revoke.", parse_mode="HTML")
+
         unset_fields = {f"prefix_expirations.{k}": "" for k in matched_keys}
         await unlocked_groups_col.update_one(
-            {"user_id": target_user_id},
+            {"user_id": uid},
             {
                 "$pull": {
                     "unlocked_prefixes": {"$in": matched_keys},
@@ -393,73 +452,114 @@ async def revoke_access_command(update: Update, context: ContextTypes.DEFAULT_TY
                 "$unset": unset_fields
             }
         )
-        await update.message.reply_text(f"🗑️ Revoked access to `{prefix}` for user `{target_user_id}`.", parse_mode="Markdown")
-        await log_event(ADMIN_ID, "ADMIN", f"Revoked {prefix} from {target_user_id}")
-        await notify_admin(context, f"👥 Admin revoked `{prefix}` access from `{target_user_id}`.")
-    except ValueError:
-        await update.message.reply_text("❌ USER_ID must be a numeric integer.")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {e}")
+        target_desc = "ALL partitions" if target_prefix == "0" else f"<code>{target_prefix[:3]}</code>"
+        await update.message.reply_text(f"🗑️ Revoked access to {target_desc} for {uname}.", parse_mode="HTML")
+        await log_event(ADMIN_ID, "ADMIN", f"Revoked {target_prefix} from {uid}")
+        await notify_admin(context, f"👥 Revoked {target_desc} from {uname}.")
 
+    elif sub == "freeze":
+        if len(args) < 2:
+            return await update.message.reply_text("❌ Usage: <code>/user freeze &lt;USER_ID|@username&gt; [PREFIX|0] [DURATION]</code>", parse_mode="HTML")
+        uid, uname = await resolve_target_user(args[1])
+        if not uid:
+            return await update.message.reply_text(f"❌ User <code>{args[1]}</code> not found.", parse_mode="HTML")
 
-async def freeze_access_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin command to freeze/suspend access to a prefix for a specific user."""
-    if update.effective_user.id != ADMIN_ID or unlocked_groups_col is None: return
-    args = context.args or []
-    if len(args) < 2:
-        return await update.message.reply_text("❌ Usage: `/freeze USER_ID PREFIX`", parse_mode="Markdown")
-    try:
-        target_user_id = int(args[0])
-        prefix = args[1].upper().strip()[:3]
-        
-        key_record = await group_keys_col.find_one({"prefix": prefix}) if group_keys_col is not None else None
-        chat_id = key_record["chat_id"] if key_record else update.effective_chat.id
-        auth_key = f"{chat_id}_{prefix}"
-        
-        await unlocked_groups_col.update_one(
-            {"user_id": target_user_id},
-            {"$addToSet": {"frozen_prefixes": auth_key}},
-            upsert=True
-        )
-        await update.message.reply_text(f"❄️ Access to `{prefix}` is now **FROZEN** for user `{target_user_id}`.", parse_mode="Markdown")
-        await log_event(ADMIN_ID, "ADMIN", f"Froze {prefix} for {target_user_id}")
-        await notify_admin(context, f"❄️ Admin froze `{prefix}` access for `{target_user_id}`.")
-    except ValueError:
-        await update.message.reply_text("❌ USER_ID must be a numeric integer.")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {e}")
+        target_prefix = "0"
+        duration_str = None
+        if len(args) > 2:
+            if any(args[2].lower().endswith(unit) for unit in ["m", "h", "d", "w"]):
+                duration_str = args[2]
+            else:
+                target_prefix = args[2].upper().strip()
+                if len(args) > 3:
+                    duration_str = args[3]
 
+        expires_at = parse_duration(duration_str) if duration_str else None
+        duration_note = f"frozen for {duration_str}" if expires_at else "Frozen Indefinitely"
 
-async def unfreeze_access_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin command to unfreeze/restore access to a prefix for a specific user."""
-    if update.effective_user.id != ADMIN_ID or unlocked_groups_col is None: return
-    args = context.args or []
-    if len(args) < 2:
-        return await update.message.reply_text("❌ Usage: `/unfreeze USER_ID PREFIX`", parse_mode="Markdown")
-    try:
-        target_user_id = int(args[0])
-        prefix = args[1].upper().strip()[:3]
-        
-        user_rec = await unlocked_groups_col.find_one({"user_id": target_user_id})
-        frozen = user_rec.get("frozen_prefixes", []) if user_rec else []
-        matched_keys = [k for k in frozen if k.endswith(f"_{prefix}") or k == prefix]
-        
+        user_rec = await unlocked_groups_col.find_one({"user_id": uid})
+        if not user_rec:
+            return await update.message.reply_text(f"❌ {uname} has no active access to freeze.", parse_mode="HTML")
+
+        unlocked = user_rec.get("unlocked_prefixes", [])
+        if target_prefix == "0":
+            matched_keys = list(unlocked)
+        else:
+            pfx = target_prefix[:3]
+            matched_keys = [k for k in unlocked if k.endswith(f"_{pfx}") or k == pfx]
+
         if not matched_keys:
-            key_record = await group_keys_col.find_one({"prefix": prefix}) if group_keys_col is not None else None
-            chat_id = key_record["chat_id"] if key_record else update.effective_chat.id
-            matched_keys = [f"{chat_id}_{prefix}"]
-            
+            return await update.message.reply_text(f"❌ {uname} has no active unlocked access matching {target_prefix}.", parse_mode="HTML")
+
+        update_op = {
+            "$pull": {"unlocked_prefixes": {"$in": matched_keys}},
+            "$addToSet": {"frozen_prefixes": {"$each": matched_keys}}
+        }
+        if expires_at:
+            update_op["$set"] = {f"prefix_expirations.{k}": expires_at for k in matched_keys}
+        await unlocked_groups_col.update_one({"user_id": uid}, update_op)
+        target_desc = "ALL partitions" if target_prefix == "0" else f"<code>{target_prefix[:3]}</code>"
+        await update.message.reply_text(f"❄️ Froze access to {target_desc} for {uname} ({duration_note}).", parse_mode="HTML")
+        await log_event(ADMIN_ID, "ADMIN", f"Froze {target_prefix} for {uid} ({duration_note})")
+        await notify_admin(context, f"❄️ Froze {target_desc} for {uname} ({duration_note}).")
+
+    elif sub == "unfreeze":
+        if len(args) < 2:
+            return await update.message.reply_text("❌ Usage: <code>/user unfreeze &lt;USER_ID|@username&gt; [PREFIX|0]</code>", parse_mode="HTML")
+        uid, uname = await resolve_target_user(args[1])
+        if not uid:
+            return await update.message.reply_text(f"❌ User <code>{args[1]}</code> not found.", parse_mode="HTML")
+
+        target_prefix = args[2].upper().strip() if len(args) > 2 else "0"
+        user_rec = await unlocked_groups_col.find_one({"user_id": uid})
+        if not user_rec:
+            return await update.message.reply_text(f"❌ {uname} has no access records.", parse_mode="HTML")
+
+        frozen = user_rec.get("frozen_prefixes", [])
+        if target_prefix == "0":
+            matched_keys = list(frozen)
+        else:
+            pfx = target_prefix[:3]
+            matched_keys = [k for k in frozen if k.endswith(f"_{pfx}") or k == pfx]
+
+        if not matched_keys:
+            return await update.message.reply_text(f"ℹ️ {uname} has no frozen partitions matching {target_prefix}.", parse_mode="HTML")
+
         await unlocked_groups_col.update_one(
-            {"user_id": target_user_id},
-            {"$pull": {"frozen_prefixes": {"$in": matched_keys}}}
+            {"user_id": uid},
+            {
+                "$pull": {"frozen_prefixes": {"$in": matched_keys}},
+                "$addToSet": {"unlocked_prefixes": {"$each": matched_keys}}
+            }
         )
-        await update.message.reply_text(f"✅ Access to `{prefix}` is now **UNFROZEN** for user `{target_user_id}`.", parse_mode="Markdown")
-        await log_event(ADMIN_ID, "ADMIN", f"Unfroze {prefix} for {target_user_id}")
-        await notify_admin(context, f"✅ Admin unfroze `{prefix}` access for `{target_user_id}`.")
-    except ValueError:
-        await update.message.reply_text("❌ USER_ID must be a numeric integer.")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {e}")
+        target_desc = "ALL partitions" if target_prefix == "0" else f"<code>{target_prefix[:3]}</code>"
+        await update.message.reply_text(f"✅ Unfroze access to {target_desc} for {uname}.", parse_mode="HTML")
+        await log_event(ADMIN_ID, "ADMIN", f"Unfroze {target_prefix} for {uid}")
+        await notify_admin(context, f"✅ Unfroze {target_desc} for {uname}.")
+
+    elif sub == "ban":
+        if len(args) < 2:
+            return await update.message.reply_text("❌ Usage: <code>/user ban &lt;USER_ID|@username&gt;</code>", parse_mode="HTML")
+        uid, uname = await resolve_target_user(args[1])
+        if not uid:
+            return await update.message.reply_text(f"❌ User <code>{args[1]}</code> not found.", parse_mode="HTML")
+        await unlocked_groups_col.update_one({"user_id": uid}, {"$set": {"is_banned": True}}, upsert=True)
+        await update.message.reply_text(f"🚫 <b>User Banned:</b> {uname} (<code>{uid}</code>) is now blocked.", parse_mode="HTML")
+        await log_event(ADMIN_ID, "ADMIN", f"Banned user {uid}")
+        await notify_admin(context, f"🚫 Admin banned {uname} ({uid}).")
+
+    elif sub == "unban":
+        if len(args) < 2:
+            return await update.message.reply_text("❌ Usage: <code>/user unban &lt;USER_ID|@username&gt;</code>", parse_mode="HTML")
+        uid, uname = await resolve_target_user(args[1])
+        if not uid:
+            return await update.message.reply_text(f"❌ User <code>{args[1]}</code> not found.", parse_mode="HTML")
+        await unlocked_groups_col.update_one({"user_id": uid}, {"$set": {"is_banned": False}})
+        await update.message.reply_text(f"✅ <b>User Unbanned:</b> {uname} (<code>{uid}</code>) is unblocked.", parse_mode="HTML")
+        await log_event(ADMIN_ID, "ADMIN", f"Unbanned user {uid}")
+        await notify_admin(context, f"✅ Admin unbanned {uname} ({uid}).")
+    else:
+        await update.message.reply_text(f"❌ Unknown /user action: <code>{sub}</code>", parse_mode="HTML")
 
 
 async def get_all_lists(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -570,85 +670,416 @@ async def handle_manage_callback(update: Update, context: ContextTypes.DEFAULT_T
         await notify_admin(context, f"🔴 NUKE FAILURE for `{prefix}`: {e}")
 
 
-async def range_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID or codes_col is None: return
-    args = context.args
-    if not args: 
-        return await update.message.reply_text("❌ Usage:\nSingle: `/del CODE`\nRange: `/del PREFIX START END`", parse_mode="Markdown")
-        
-    try:
-        if len(args) == 1:
-            code = args[0].upper().strip()
+async def file_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Unified file storage & partition router: /file save|del|lock|unlock|mv"""
+    if update.effective_user.id != ADMIN_ID or codes_col is None:
+        return
+    args = context.args or []
+    if not args:
+        help_text = (
+            "📁 <b>FILE STORAGE ENGINE</b>\n\n"
+            "• <code>/file save &lt;PREFIX&gt;</code> - Index replied file (auto-increments 001, 002...)\n"
+            "• <code>/file save &lt;PREFIX&gt; &lt;START&gt; &lt;END&gt;</code> - Forward mass index range\n"
+            "• <code>/file del &lt;CODE&gt;</code> - Delete single asset\n"
+            "• <code>/file del &lt;PREFIX&gt; &lt;START&gt; &lt;END&gt;</code> - Surgical range delete\n"
+            "• <code>/file lock &lt;PREFIX&gt; &lt;PASSWORD&gt;</code> - Secure partition with passkey\n"
+            "• <code>/file unlock &lt;PREFIX&gt;</code> - Remove passkey partition\n"
+            "• <code>/file mv &lt;OLD&gt; &lt;NEW&gt;</code> - Bulk migrate/rename prefix"
+        )
+        return await update.message.reply_text(help_text, parse_mode="HTML")
+
+    sub = args[0].lower()
+
+    if sub == "save":
+        if update.message.reply_to_message:
+            if len(args) < 2:
+                return await update.message.reply_text("❌ Usage: <code>/file save &lt;PREFIX&gt;</code> (replying to a file)", parse_mode="HTML")
+
+            raw_target = args[1].upper().strip()
+            if len(raw_target) > 3 and raw_target[3:].isdigit():
+                code_to_save = raw_target
+            else:
+                prefix = raw_target[:3]
+                escaped = re.escape(prefix)
+                exist = await codes_col.count_documents({"code": {"$regex": f"^{escaped}"}})
+                code_to_save = f"{prefix}{exist + 1:03d}"
+
+            f_type, f_id, caption, f_name = extract_file_data(update.message.reply_to_message)
+            if not f_id:
+                return await update.message.reply_text("❌ No recognizable file found in replied message.", parse_mode="HTML")
+
+            data = {
+                "chat_id": update.effective_chat.id,
+                "message_id": update.message.reply_to_message.message_id,
+                "file_type": f_type,
+                "file_id": f_id,
+                "caption": caption or "",
+                "file_name": f_name or ""
+            }
+            await codes_col.update_one({"code": code_to_save}, {"$set": data}, upsert=True)
+            await update.message.reply_text(f"✅ Indexed <code>{code_to_save}</code> (Type: {f_type})", parse_mode="HTML")
+            await log_event(ADMIN_ID, "ADMIN", f"Indexed {code_to_save}")
+            await notify_admin(context, f"✅ Admin indexed <code>{code_to_save}</code>.")
+        else:
+            if len(args) < 4:
+                return await update.message.reply_text(
+                    "❌ <b>Usage for /file save:</b>\n"
+                    "• Single: Reply to a file with <code>/file save &lt;PREFIX&gt;</code>\n"
+                    "• Bulk: <code>/file save &lt;PREFIX&gt; &lt;START&gt; &lt;END&gt;</code>",
+                    parse_mode="HTML"
+                )
+            try:
+                if args[1].isdigit() and args[2].isdigit():
+                    start_id, end_id = int(args[1]), int(args[2])
+                    prefix = args[3].upper().strip()[:3]
+                elif args[2].isdigit() and args[3].isdigit():
+                    prefix = args[1].upper().strip()[:3]
+                    start_id, end_id = int(args[2]), int(args[3])
+                else:
+                    return await update.message.reply_text("❌ Usage: <code>/file save &lt;PREFIX&gt; &lt;START_ID&gt; &lt;END_ID&gt;</code>", parse_mode="HTML")
+
+                if start_id > end_id:
+                    return await update.message.reply_text("❌ START_ID must be less than or equal to END_ID.", parse_mode="HTML")
+
+                escaped_prefix = re.escape(prefix)
+                exist = await codes_col.count_documents({"code": {"$regex": f"^{escaped_prefix}"}})
+                curr = exist + 1
+                status_msg = await update.message.reply_text(f"🔄 Probing <code>{prefix}</code> range from {start_id} to {end_id}...", parse_mode="HTML")
+                indexed_count = 0
+                for m_id in range(start_id, end_id + 1):
+                    try:
+                        probe = await context.bot.forward_message(chat_id=ADMIN_ID, from_chat_id=update.effective_chat.id, message_id=m_id)
+                        f_type, f_id, caption, f_name = extract_file_data(probe)
+                        await probe.delete()
+                        if f_id:
+                            code_to_save = f"{prefix}{curr:03d}"
+                            await codes_col.update_one(
+                                {"code": code_to_save},
+                                {"$set": {
+                                    "chat_id": update.effective_chat.id,
+                                    "message_id": m_id,
+                                    "file_type": f_type,
+                                    "file_id": f_id,
+                                    "caption": caption or "",
+                                    "file_name": f_name or ""
+                                }},
+                                upsert=True
+                            )
+                            indexed_count += 1
+                            curr += 1
+                    except Exception:
+                        continue
+                await status_msg.edit_text(f"✅ <b>Bulk Indexing Complete!</b> Indexed <code>{indexed_count}</code> items for <code>{prefix}</code>.", parse_mode="HTML")
+                await log_event(ADMIN_ID, "ADMIN", f"Bulk save: {prefix} ({indexed_count} items)")
+                await notify_admin(context, f"📦 Bulk save success for <code>{prefix}</code> ({indexed_count} items).")
+            except Exception as e:
+                await update.message.reply_text(f"❌ Error during bulk save: {e}", parse_mode="HTML")
+                await notify_admin(context, f"🔴 Bulk save failure: {e}")
+
+    elif sub == "del":
+        if len(args) == 2:
+            code = args[1].upper().strip()
             res = await codes_col.delete_one({"code": code})
             if res.deleted_count > 0:
-                await update.message.reply_text(f"🗑️ vaporized `{code}`.", parse_mode="Markdown")
+                await update.message.reply_text(f"🗑️ Vaporized <code>{code}</code>.", parse_mode="HTML")
                 await log_event(ADMIN_ID, "ADMIN", f"Single Del: {code}")
-                await notify_admin(context, f"🗑️ Admin deleted `{code}`.")
+                await notify_admin(context, f"🗑️ Admin deleted <code>{code}</code>.")
             else:
-                await update.message.reply_text(f"❌ `{code}` not found.")
-                
-        elif len(args) == 3:
-            prefix, start, end = args[0].upper().strip()[:3], int(args[1]), int(args[2])
-            if start < 1 or end < start or (end - start + 1) > 100:
-                return await update.message.reply_text("❌ Range error: Maximum 100 items can be deleted at once.")
-            target_codes = [f"{prefix}{i:03d}" for i in range(start, end + 1)]
-            result = await codes_col.delete_many({"code": {"$in": target_codes}})
-            await update.message.reply_text(f"🗑️ vaporized `{result.deleted_count}` items.", parse_mode="Markdown")
-            await log_event(ADMIN_ID, "ADMIN", f"Range Del: {prefix}{start:03d}-{end:03d}")
-            await notify_admin(context, f"🗑️ Range Delete for `{prefix}` ({result.deleted_count} items).")
+                await update.message.reply_text(f"❌ <code>{code}</code> not found.", parse_mode="HTML")
+        elif len(args) == 4:
+            try:
+                prefix = args[1].upper().strip()[:3]
+                start = int(args[2])
+                end = int(args[3])
+                if start < 1 or end < start or (end - start + 1) > 100:
+                    return await update.message.reply_text("❌ Range error: Maximum 100 items can be deleted at once.", parse_mode="HTML")
+                target_codes = [f"{prefix}{i:03d}" for i in range(start, end + 1)]
+                result = await codes_col.delete_many({"code": {"$in": target_codes}})
+                await update.message.reply_text(f"🗑️ Vaporized <code>{result.deleted_count}</code> items.", parse_mode="HTML")
+                await log_event(ADMIN_ID, "ADMIN", f"Range Del: {prefix}{start:03d}-{end:03d}")
+                await notify_admin(context, f"🗑️ Range Delete for <code>{prefix}</code> ({result.deleted_count} items).")
+            except ValueError:
+                await update.message.reply_text("❌ START and END must be numbers.", parse_mode="HTML")
         else:
-            await update.message.reply_text("❌ Usage:\nSingle: `/del CODE`\nRange: `/del PREFIX START END`", parse_mode="Markdown")
-    except Exception as e: 
-        await update.message.reply_text(f"❌ Error: {e}")
-        await notify_admin(context, f"🔴 DEL FAILURE: {e}")
+            await update.message.reply_text(
+                "❌ <b>Usage:</b>\n"
+                "• Single: <code>/file del &lt;CODE&gt;</code>\n"
+                "• Range: <code>/file del &lt;PREFIX&gt; &lt;START&gt; &lt;END&gt;</code>",
+                parse_mode="HTML"
+            )
+
+    elif sub == "lock":
+        if len(args) < 3:
+            return await update.message.reply_text("❌ Usage: <code>/file lock &lt;PREFIX&gt; &lt;PASSWORD&gt;</code>", parse_mode="HTML")
+        prefix = args[1].upper().strip()[:3]
+        password = args[2].strip()
+        if group_keys_col is not None:
+            await group_keys_col.update_one({"chat_id": update.effective_chat.id, "prefix": prefix}, {"$set": {"secret_key": password}}, upsert=True)
+        await update.message.reply_text(f"🔒 Partition <code>{prefix}</code> locked with passkey!", parse_mode="HTML")
+        await log_event(ADMIN_ID, "ADMIN", f"Locked prefix: {prefix}")
+        await notify_admin(context, f"🔒 Access key set for <code>{prefix}</code>.")
+
+    elif sub == "unlock":
+        if len(args) < 2:
+            return await update.message.reply_text("❌ Usage: <code>/file unlock &lt;PREFIX&gt;</code>", parse_mode="HTML")
+        prefix = args[1].upper().strip()[:3]
+        if group_keys_col is not None:
+            res = await group_keys_col.delete_many({"prefix": prefix})
+            if res.deleted_count > 0:
+                await update.message.reply_text(f"🔓 <b>Partition Removed!</b> Prefix <code>{prefix}</code> is now completely unlocked.", parse_mode="HTML")
+                await log_event(ADMIN_ID, "ADMIN", f"Unset Key: {prefix}")
+                await notify_admin(context, f"🔓 Admin removed password partition from <code>{prefix}</code>.")
+            else:
+                await update.message.reply_text(f"ℹ️ Prefix <code>{prefix}</code> was not password-locked.", parse_mode="HTML")
+
+    elif sub == "mv":
+        if len(args) < 3:
+            return await update.message.reply_text("❌ Usage: <code>/file mv &lt;OLD&gt; &lt;NEW&gt;</code>", parse_mode="HTML")
+        old_prefix = args[1].upper().strip()[:3]
+        new_prefix = args[2].upper().strip()[:3]
+        if old_prefix == new_prefix:
+            return await update.message.reply_text("❌ Prefixes are the same.", parse_mode="HTML")
+
+        status = await update.message.reply_text(f"🔄 <b>Migrating <code>{old_prefix}</code> to <code>{new_prefix}</code>...</b>", parse_mode="HTML")
+        try:
+            escaped_old = re.escape(old_prefix)
+            cursor = codes_col.find({"code": {"$regex": f"^{escaped_old}"}})
+            count = 0
+            async for record in cursor:
+                old_code = record["code"]
+                suffix = old_code[3:]
+                new_code = f"{new_prefix}{suffix}"
+                await codes_col.update_one({"_id": record["_id"]}, {"$set": {"code": new_code}})
+                count += 1
+
+            if group_keys_col is not None:
+                await group_keys_col.update_many({"prefix": old_prefix}, {"$set": {"prefix": new_prefix}})
+            if prefix_labels_col is not None:
+                await prefix_labels_col.update_many({"prefix": old_prefix}, {"$set": {"prefix": new_prefix}})
+
+            await status.edit_text(f"✅ <b>Migration Complete!</b>\nMoved <code>{count}</code> items from <code>{old_prefix}</code> to <code>{new_prefix}</code>.", parse_mode="HTML")
+            await log_event(ADMIN_ID, "ADMIN", f"Rename Prefix: {old_prefix} -> {new_prefix} ({count} items)")
+            await notify_admin(context, f"🔄 Migrated <code>{old_prefix}</code> to <code>{new_prefix}</code> ({count} items).")
+        except Exception as e:
+            logger.error(f"Rename error: {e}")
+            await status.edit_text(f"❌ <b>Migration Failed:</b> {e}", parse_mode="HTML")
+            await notify_admin(context, f"🔴 RENAME FAILURE: {e}")
+    else:
+        await update.message.reply_text(f"❌ Unknown /file action: <code>{sub}</code>", parse_mode="HTML")
 
 
-async def rename_prefix(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID or codes_col is None: return
-    args = context.args
-    if len(args) < 2:
-        return await update.message.reply_text("❌ Usage: `/rename_prefix OLD NEW`", parse_mode="Markdown")
-    
-    old_prefix = args[0].upper().strip()[:3]
-    new_prefix = args[1].upper().strip()[:3]
-    
-    if old_prefix == new_prefix:
-        return await update.message.reply_text("❌ Prefixes are the same.")
+async def media_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Unified media catalog router: /media label|tmdb|banner|season|refresh"""
+    if update.effective_user.id != ADMIN_ID or prefix_labels_col is None:
+        return
+    args = context.args or []
+    if not args:
+        help_text = (
+            "🎬 <b>MEDIA & CATALOG MANAGEMENT</b>\n\n"
+            "• <code>/media label set &lt;PREFIX&gt; &lt;MOVIE|SERIES&gt; &lt;TITLE&gt;</code> - Handpick title & category\n"
+            "• <code>/media label del &lt;PREFIX&gt;</code> - Remove partition label\n"
+            "• <code>/media tmdb set &lt;PREFIX&gt; &lt;QUERY/ID&gt;</code> - Link TMDB metadata & poster\n"
+            "• <code>/media tmdb del &lt;PREFIX&gt;</code> - Unlink TMDB metadata\n"
+            "• <code>/media banner &lt;PREFIX&gt; toggle</code> - Toggle official poster vs backdrop\n"
+            "• <code>/media season set &lt;PREFIX&gt; &lt;SN&gt; &lt;START&gt; &lt;END&gt;</code> - Map season episode range\n"
+            "• <code>/media season del &lt;PREFIX&gt; &lt;SN&gt;</code> - Delete specific season\n"
+            "• <code>/media season clear &lt;PREFIX&gt;</code> - Clear all mapped seasons\n"
+            "• <code>/media refresh</code> - Sync Telegram files & refresh linked TMDB"
+        )
+        return await update.message.reply_text(help_text, parse_mode="HTML")
 
-    status = await update.message.reply_text(f"🔄 **Migrating `{old_prefix}` to `{new_prefix}`...**", parse_mode="Markdown")
-    
-    try:
-        escaped_old = re.escape(old_prefix)
-        cursor = codes_col.find({"code": {"$regex": f"^{escaped_old}"}})
-        count = 0
-        async for record in cursor:
-            old_code = record["code"]
-            suffix = old_code[3:]
-            new_code = f"{new_prefix}{suffix}"
-            await codes_col.update_one({"_id": record["_id"]}, {"$set": {"code": new_code}})
-            count += 1
-            
-        await group_keys_col.update_many({"prefix": old_prefix}, {"$set": {"prefix": new_prefix}})
-        
-        await status.edit_text(f"✅ **Migration Complete!**\nMoved `{count}` items from `{old_prefix}` to `{new_prefix}`.", parse_mode="Markdown")
-        await log_event(ADMIN_ID, "ADMIN", f"Rename Prefix: {old_prefix} -> {new_prefix} ({count} items)")
-        await notify_admin(context, f"🔄 Migrated `{old_prefix}` to `{new_prefix}` ({count} items).")
-    except Exception as e:
-        logger.error(f"Rename error: {e}")
-        await status.edit_text(f"❌ **Migration Failed:** {e}")
-        await notify_admin(context, f"🔴 RENAME FAILURE: {e}")
+    sub = args[0].lower()
+
+    if sub == "label":
+        action = args[1].lower() if len(args) > 1 else ""
+        if action == "set":
+            if len(args) < 5:
+                return await update.message.reply_text("❌ Usage: <code>/media label set &lt;PREFIX&gt; &lt;MOVIE|SERIES&gt; &lt;TITLE&gt;</code>", parse_mode="HTML")
+            prefix = args[2].upper().strip()[:3]
+            category = args[3].upper().strip()
+            title = " ".join(args[4:]).strip()
+            if category not in ["MOVIE", "SERIES"]:
+                return await update.message.reply_text("❌ Category must be <b>MOVIE</b> or <b>SERIES</b>.", parse_mode="HTML")
+            set_doc = {"name": title, "category": category.lower()}
+            await prefix_labels_col.update_one({"prefix": prefix}, {"$set": set_doc}, upsert=True)
+            await update.message.reply_text(
+                f"🏷️ <b>Handpicked Label Set!</b>\n"
+                f"Partition <code>{prefix}</code> [{category}] ➔ <b>{html.escape(title)}</b>\n\n"
+                f"💡 <i>To link specific TMDB metadata & poster:</i> <code>/media tmdb set {prefix} &lt;title or ID&gt;</code>",
+                parse_mode="HTML"
+            )
+            await log_event(ADMIN_ID, "ADMIN", f"Set Label: {prefix} -> {title} [{category}]")
+            await notify_admin(context, f"🏷️ Admin assigned label <code>{prefix}</code> ➔ {title} [{category}].")
+        elif action == "del":
+            if len(args) < 3:
+                return await update.message.reply_text("❌ Usage: <code>/media label del &lt;PREFIX&gt;</code>", parse_mode="HTML")
+            prefix = args[2].upper().strip()[:3]
+            rec = await prefix_labels_col.find_one({"prefix": prefix})
+            if not rec:
+                return await update.message.reply_text(f"ℹ️ Prefix <code>{prefix}</code> has no assigned title or category.", parse_mode="HTML")
+            old_title = rec.get("name", prefix)
+            old_cat = rec.get("category", "unknown").upper()
+            await prefix_labels_col.delete_one({"prefix": prefix})
+            asset_count = await codes_col.count_documents({"code": {"$regex": f"^{re.escape(prefix)}"}}) if codes_col is not None else 0
+            await update.message.reply_text(
+                f"🗑️ <b>Label Removed!</b>\n"
+                f"Partition <code>{prefix}</code> (<code>{html.escape(old_title)}</code> [{old_cat}]) unlinked.\n"
+                f"📦 <code>{asset_count}</code> asset(s) in database remain preserved.",
+                parse_mode="HTML"
+            )
+            await log_event(ADMIN_ID, "ADMIN", f"Deleted label: {prefix}")
+            await notify_admin(context, f"🏷️ Admin removed title/category label from <code>{prefix}</code> ({asset_count} assets kept).")
+        else:
+            await update.message.reply_text("❌ Usage:\n• <code>/media label set &lt;PREFIX&gt; &lt;MOVIE|SERIES&gt; &lt;TITLE&gt;</code>\n• <code>/media label del &lt;PREFIX&gt;</code>", parse_mode="HTML")
+
+    elif sub == "tmdb":
+        action = args[1].lower() if len(args) > 1 else ""
+        if action == "set":
+            if len(args) < 4:
+                return await update.message.reply_text(
+                    "❌ <b>Usage:</b> <code>/media tmdb set &lt;PREFIX&gt; &lt;TITLE or TMDB_ID&gt;</code>\n\n"
+                    "<b>Examples:</b>\n"
+                    "• <code>/media tmdb set SLV A Silent Voice (2016)</code>\n"
+                    "• <code>/media tmdb set SLV 378064</code> (Direct TMDB ID)\n"
+                    "• <code>/media tmdb set SLV tmdb:378064</code>",
+                    parse_mode="HTML"
+                )
+            prefix = args[2].upper().strip()[:3]
+            query = " ".join(args[3:]).strip()
+            label_rec = await prefix_labels_col.find_one({"prefix": prefix})
+            if not label_rec:
+                return await update.message.reply_text(
+                    f"❌ Prefix <code>{prefix}</code> is not labeled yet!\n"
+                    f"Please run <code>/media label set {prefix} &lt;MOVIE|SERIES&gt; &lt;TITLE&gt;</code> first to define its category.",
+                    parse_mode="HTML"
+                )
+            category = label_rec.get("category", "movie")
+            status_msg = await update.message.reply_text(f"🔍 Searching TMDB for <code>{html.escape(query)}</code> [{category.upper()}]...", parse_mode="HTML")
+            tmdb_info = await fetch_tmdb_metadata(query, category)
+            if not tmdb_info:
+                return await status_msg.edit_text(
+                    f"❌ No TMDB matches found for <code>{html.escape(query)}</code> under category <code>{category}</code>.\n"
+                    f"💡 <i>Tip:</i> Try providing the release year (e.g. <code>2016</code>) or direct TMDB ID.",
+                    parse_mode="HTML"
+                )
+            tmdb_info["pinned"] = True
+            await prefix_labels_col.update_one({"prefix": prefix}, {"$set": {"tmdb": tmdb_info}})
+            year_str = f" ({tmdb_info['year']})" if tmdb_info.get("year") else ""
+            genres_str = f"\n🎭 <b>Genres:</b> {html.escape(tmdb_info['genres'])}" if tmdb_info.get("genres") else ""
+            rating_str = f"\n⭐ <b>Rating:</b> <code>{tmdb_info['rating']}/10</code>" if tmdb_info.get("rating") else ""
+            poster_note = "\n🖼️ <b>Official Poster:</b> Attached" if tmdb_info.get("poster_url") else ""
+            overview_snippet = f"\n\n📖 <b>Overview:</b>\n<i>{html.escape(tmdb_info['overview'][:200])}...</i>" if tmdb_info.get("overview") else ""
+            await status_msg.edit_text(
+                f"✅ <b>TMDB Synced for <code>{prefix}</code>!</b>\n\n"
+                f"🎬 <b>Matched:</b> <b>{html.escape(tmdb_info['title'])}</b>{year_str}"
+                f"{rating_str}"
+                f"{genres_str}"
+                f"{poster_note}"
+                f"{overview_snippet}\n\n"
+                f"<i>(Official poster and metadata are now linked to <code>{prefix}</code>)</i>",
+                parse_mode="HTML"
+            )
+            await log_event(ADMIN_ID, "ADMIN", f"TMDB set for {prefix}: {tmdb_info['title']}")
+            await notify_admin(context, f"🎬 TMDB metadata linked to <code>{prefix}</code>: {tmdb_info['title']}.")
+        elif action == "del":
+            if len(args) < 3:
+                return await update.message.reply_text("❌ Usage: <code>/media tmdb del &lt;PREFIX&gt;</code>", parse_mode="HTML")
+            prefix = args[2].upper().strip()[:3]
+            res = await prefix_labels_col.update_one({"prefix": prefix}, {"$unset": {"tmdb": ""}})
+            if res.modified_count > 0:
+                await update.message.reply_text(f"🗑️ Removed TMDB metadata from <code>{prefix}</code>.", parse_mode="HTML")
+                await log_event(ADMIN_ID, "ADMIN", f"Deleted TMDB for {prefix}")
+                await notify_admin(context, f"🎬 Admin cleared TMDB metadata from <code>{prefix}</code>.")
+            else:
+                await update.message.reply_text(f"ℹ️ Prefix <code>{prefix}</code> had no TMDB metadata.", parse_mode="HTML")
+        else:
+            await update.message.reply_text("❌ Usage:\n• <code>/media tmdb set &lt;PREFIX&gt; &lt;QUERY/ID&gt;</code>\n• <code>/media tmdb del &lt;PREFIX&gt;</code>", parse_mode="HTML")
+
+    elif sub == "banner":
+        if len(args) < 2:
+            return await update.message.reply_text("❌ Usage: <code>/media banner &lt;PREFIX&gt; toggle</code>", parse_mode="HTML")
+        if args[1].lower() == "toggle" and len(args) > 2:
+            prefix = args[2].upper().strip()[:3]
+        else:
+            prefix = args[1].upper().strip()[:3]
+
+        rec = await prefix_labels_col.find_one({"prefix": prefix})
+        if not rec:
+            return await update.message.reply_text(f"❌ Prefix <code>{prefix}</code> not found in library.", parse_mode="HTML")
+        current_mode = rec.get("banner_mode", "poster")
+        new_mode = "backdrop" if current_mode == "poster" else "poster"
+        await prefix_labels_col.update_one({"prefix": prefix}, {"$set": {"banner_mode": new_mode}})
+        await update.message.reply_text(
+            f"🖼️ <b>Banner Mode Toggled!</b>\n"
+            f"Partition <code>{prefix}</code> is now set to: <b>{new_mode.upper()}</b> (was {current_mode.upper()}).",
+            parse_mode="HTML"
+        )
+        await log_event(ADMIN_ID, "ADMIN", f"Banner toggled for {prefix}: {new_mode}")
+        await notify_admin(context, f"🖼️ Banner mode for <code>{prefix}</code> toggled to <b>{new_mode.upper()}</b>.")
+
+    elif sub == "season":
+        action = args[1].lower() if len(args) > 1 else ""
+        if action == "set":
+            if len(args) < 6:
+                return await update.message.reply_text("❌ Usage: <code>/media season set &lt;PREFIX&gt; &lt;SN&gt; &lt;START&gt; &lt;END&gt;</code>", parse_mode="HTML")
+            try:
+                prefix = args[2].upper().strip()[:3]
+                sn_num = int(args[3])
+                start = int(args[4])
+                end = int(args[5])
+                season_obj = {"num": sn_num, "start": start, "end": end}
+                rec = await prefix_labels_col.find_one({"prefix": prefix})
+                if not rec:
+                    return await update.message.reply_text(f"❌ Prefix <code>{prefix}</code> not labeled.", parse_mode="HTML")
+                seasons = rec.get("seasons", [])
+                seasons = [s for s in seasons if s["num"] != sn_num]
+                seasons.append(season_obj)
+                seasons.sort(key=lambda x: x["num"])
+                await prefix_labels_col.update_one({"prefix": prefix}, {"$set": {"seasons": seasons}})
+                await update.message.reply_text(f"✅ Season {sn_num} mapped for <code>{prefix}</code> ({start}-{end}).", parse_mode="HTML")
+            except ValueError:
+                await update.message.reply_text("❌ SN, START, and END must be numbers.", parse_mode="HTML")
+        elif action == "del":
+            if len(args) < 4:
+                return await update.message.reply_text("❌ Usage: <code>/media season del &lt;PREFIX&gt; &lt;SN&gt;</code>", parse_mode="HTML")
+            try:
+                prefix = args[2].upper().strip()[:3]
+                sn_num = int(args[3])
+                rec = await prefix_labels_col.find_one({"prefix": prefix})
+                if not rec or "seasons" not in rec:
+                    return await update.message.reply_text(f"❌ No seasons found for <code>{prefix}</code>.", parse_mode="HTML")
+                seasons = [s for s in rec["seasons"] if s["num"] != sn_num]
+                await prefix_labels_col.update_one({"prefix": prefix}, {"$set": {"seasons": seasons}})
+                await update.message.reply_text(f"🗑️ Season {sn_num} deleted for <code>{prefix}</code>.", parse_mode="HTML")
+            except ValueError:
+                await update.message.reply_text("❌ SN must be a number.", parse_mode="HTML")
+        elif action == "clear":
+            if len(args) < 3:
+                return await update.message.reply_text("❌ Usage: <code>/media season clear &lt;PREFIX&gt;</code>", parse_mode="HTML")
+            prefix = args[2].upper().strip()[:3]
+            await prefix_labels_col.update_one({"prefix": prefix}, {"$unset": {"seasons": ""}})
+            await update.message.reply_text(f"🔥 Seasons wiped for <code>{prefix}</code>.", parse_mode="HTML")
+        else:
+            await update.message.reply_text("❌ Usage:\n• <code>/media season set &lt;PREFIX&gt; &lt;SN&gt; &lt;START&gt; &lt;END&gt;</code>\n• <code>/media season del &lt;PREFIX&gt; &lt;SN&gt;</code>\n• <code>/media season clear &lt;PREFIX&gt;</code>", parse_mode="HTML")
+
+    elif sub == "refresh":
+        await refresh_metadata(update, context)
+
+    else:
+        await update.message.reply_text(f"❌ Unknown /media action: <code>{sub}</code>", parse_mode="HTML")
 
 
 async def refresh_metadata(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Syncs missing Telegram file metadata and enriches all existing files & prefix labels with full TMDB metadata."""
-    if update.effective_user.id != ADMIN_ID or codes_col is None: return
-    status_msg = await update.effective_message.reply_text("🔄 **Full System Sync Initiated**\nChecking file metadata & TMDB...", parse_mode="Markdown")
-    
+    """Syncs missing Telegram file metadata and enriches existing handpicked prefix labels with TMDB metadata."""
+    if update.effective_user.id != ADMIN_ID or codes_col is None:
+        return
+    status_msg = await update.effective_message.reply_text("🔄 <b>Full System Sync Initiated</b>\nChecking file metadata & TMDB...", parse_mode="HTML")
+
     # 1. Sync file-level metadata from Telegram
     query_filter = {"$or": [{"file_id": {"$exists": False}}, {"file_id": None}, {"file_id": ""}, {"file_name": {"$exists": False}}]}
     total_to_sync = await codes_col.count_documents(query_filter)
     file_sync_count = 0
-    
+
     if total_to_sync > 0:
         cursor = codes_col.find(query_filter)
         async for record in cursor:
@@ -660,8 +1091,8 @@ async def refresh_metadata(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await codes_col.update_one({"_id": record["_id"]}, {"$set": {"file_type": f_type, "file_id": f_id, "caption": caption or "", "file_name": f_name or ""}})
                     file_sync_count += 1
                 if (file_sync_count % 5 == 0) or file_sync_count == total_to_sync:
-                    await status_msg.edit_text(f"🔄 **Syncing Files...**\n`{file_sync_count}/{total_to_sync}` assets updated.", parse_mode="Markdown")
-                await asyncio.sleep(0.5) 
+                    await status_msg.edit_text(f"🔄 <b>Syncing Files...</b>\n<code>{file_sync_count}/{total_to_sync}</code> assets updated.", parse_mode="HTML")
+                await asyncio.sleep(0.5)
             except Exception as e:
                 logger.warning(f"File probe failed for {record.get('code')}: {e}")
                 continue
@@ -681,269 +1112,32 @@ async def refresh_metadata(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 cat = label_doc.get("category", "movie")
                 existing_tmdb = label_doc.get("tmdb") or {}
                 query_target = str(existing_tmdb.get("tmdb_id")) if existing_tmdb.get("tmdb_id") else name
-                
+
                 if query_target:
                     tmdb_info = await fetch_tmdb_metadata(query_target, cat)
                     if tmdb_info:
+                        tmdb_info["pinned"] = True
                         await prefix_labels_col.update_one({"_id": label_doc["_id"]}, {"$set": {"tmdb": tmdb_info}})
                         tmdb_sync_count += 1
 
                 if (processed % 3 == 0) or processed == total_labels:
                     await status_msg.edit_text(
-                        f"🔄 **Refreshing Linked TMDB Metadata...**\n"
-                        f"`{processed}/{total_labels}` titles checked.\n"
-                        f"Updated: `{tmdb_sync_count}`",
-                        parse_mode="Markdown"
+                        f"🔄 <b>Refreshing Linked TMDB Metadata...</b>\n"
+                        f"<code>{processed}/{total_labels}</code> titles checked.\n"
+                        f"Updated: <code>{tmdb_sync_count}</code>",
+                        parse_mode="HTML"
                     )
                 await asyncio.sleep(0.25)
 
     summary_lines = [
-        "✅ **Sync Finalized!**",
-        f"• Files probed/updated: `{file_sync_count}`",
-        f"• Handpicked TMDB records refreshed: `{tmdb_sync_count}`",
+        "✅ <b>Sync Finalized!</b>",
+        f"• Files probed/updated: <code>{file_sync_count}</code>",
+        f"• Handpicked TMDB records refreshed: <code>{tmdb_sync_count}</code>",
     ]
 
-    await status_msg.edit_text("\n".join(summary_lines), parse_mode="Markdown")
+    await status_msg.edit_text("\n".join(summary_lines), parse_mode="HTML")
     await log_event(ADMIN_ID, "ADMIN", f"Metadata Sync: {file_sync_count} files, {tmdb_sync_count} TMDB records")
-    await notify_admin(context, f"📊 Metadata Sync complete. `{file_sync_count}` files and `{tmdb_sync_count}` TMDB records enriched.")
-
-
-async def auto_bulk_register(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID or codes_col is None: return
-    if len(context.args) < 3: return
-    try:
-        start_id, end_id, prefix = int(context.args[0]), int(context.args[1]), context.args[2].upper().strip()[:3]
-        escaped_prefix = re.escape(prefix)
-        exist = await codes_col.count_documents({"code": {"$regex": f"^{escaped_prefix}"}})
-        curr = exist + 1
-        status_msg = await update.message.reply_text(f"🔄 Probing `{prefix}` range from {start_id} to {end_id}...")
-        indexed_count = 0
-        for m_id in range(start_id, end_id + 1):
-            try:
-                probe = await context.bot.forward_message(chat_id=ADMIN_ID, from_chat_id=update.effective_chat.id, message_id=m_id)
-                f_type, f_id, caption, f_name = extract_file_data(probe)
-                await probe.delete()
-                if f_id:
-                    code_to_save = f"{prefix}{curr:03d}"
-                    await codes_col.update_one({"code": code_to_save}, {"$set": {"chat_id": update.effective_chat.id, "message_id": m_id, "file_type": f_type, "file_id": f_id, "caption": caption or "", "file_name": f_name or ""}}, upsert=True)
-                    indexed_count += 1
-                    curr += 1
-            except: continue
-        await status_msg.edit_text(f"✅ **Bulk Indexing Complete!** Indexed `{indexed_count}` items for `{prefix}`.")
-        await log_event(ADMIN_ID, "ADMIN", f"Autobulk: {prefix} ({indexed_count} items)")
-        await notify_admin(context, f"📦 Autobulk Success for `{prefix}` ({indexed_count} items).")
-    except Exception as e: 
-        await update.message.reply_text(f"❌ Error during autobulk: {e}")
-        await notify_admin(context, f"🔴 AUTOBULK FAILURE: {e}")
-
-
-async def save_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
-    if not update.message.reply_to_message or not context.args or codes_col is None: return
-    code = context.args[0].upper().strip()
-    f_type, f_id, caption, f_name = extract_file_data(update.message.reply_to_message)
-    if not f_id: return await update.message.reply_text("❌ No recognizable file found.")
-    data = {"chat_id": update.effective_chat.id, "message_id": update.message.reply_to_message.message_id, "file_type": f_type, "file_id": f_id, "caption": caption or "", "file_name": f_name or ""}
-    await codes_col.update_one({"code": code}, {"$set": data}, upsert=True)
-    await update.message.reply_text(f"✅ Indexed `{code}` (Type: {f_type})")
-    await notify_admin(context, f"✅ Admin indexed `{code}`.")
-
-
-async def set_group_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID or group_keys_col is None: return
-    if len(context.args) < 2: return await update.message.reply_text("❌ Usage: `/setkey PREFIX PASSWORD`")
-    prefix = context.args[0].upper().strip()[:3]
-    password = context.args[1].strip()
-    await group_keys_col.update_one({"chat_id": update.effective_chat.id, "prefix": prefix}, {"$set": {"secret_key": password}}, upsert=True)
-    await update.message.reply_text(f"🔒 Key set for prefix `{prefix}`!")
-    await notify_admin(context, f"🔒 Access key set for `{prefix}`.")
-
-
-async def unset_group_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin command to remove password partition from a movie or series prefix."""
-    if update.effective_user.id != ADMIN_ID or group_keys_col is None: return
-    if not context.args:
-        return await update.message.reply_text("❌ Usage: `/unsetkey PREFIX`\nExample: `/unsetkey MOV`", parse_mode="Markdown")
-
-    prefix = context.args[0].upper().strip()[:3]
-    res = await group_keys_col.delete_many({"prefix": prefix})
-    if res.deleted_count > 0:
-        await update.message.reply_text(f"🔓 **Partition Removed!** Prefix `{prefix}` is now completely unlocked for all users.", parse_mode="Markdown")
-        await log_event(ADMIN_ID, "ADMIN", f"Unset Key: {prefix}")
-        await notify_admin(context, f"🔓 Admin removed password partition from `{prefix}`.")
-    else:
-        await update.message.reply_text(f"ℹ️ Prefix `{prefix}` was not password-locked.")
-
-
-async def set_prefix_label(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID or prefix_labels_col is None: return
-    if len(context.args) < 3: return await update.message.reply_text("❌ Usage: `/setlabel PREFIX MOVIE/SERIES NAME`")
-    
-    prefix = context.args[0].upper().strip()[:3]
-    category = context.args[1].upper().strip()
-    name = " ".join(context.args[2:]).strip()
-    
-    if category not in ["MOVIE", "SERIES"]:
-        return await update.message.reply_text("❌ Category must be **MOVIE** or **SERIES**.")
-        
-    set_doc = {"name": name, "category": category.lower()}
-    await prefix_labels_col.update_one({"prefix": prefix}, {"$set": set_doc}, upsert=True)
-    await update.message.reply_text(
-        f"🏷️ **Handpicked Label Set!**\n"
-        f"Partition `{prefix}` [{category}] ➔ **{name}**\n\n"
-        f"💡 *To link specific TMDB metadata & poster:* `/tmdb {prefix} <title or ID>`",
-        parse_mode="Markdown"
-    )
-    await log_event(ADMIN_ID, "ADMIN", f"Set Label: {prefix} -> {name} [{category}]")
-    await notify_admin(context, f"🏷️ Admin assigned label `{prefix}` ➔ {name} [{category}].")
-
-
-async def delete_prefix_label(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin command to remove title, category, and TMDB metadata from a prefix partition."""
-    if update.effective_user.id != ADMIN_ID or prefix_labels_col is None:
-        return
-    if not context.args:
-        return await update.message.reply_text("❌ Usage: `/dellabel PREFIX`\nExample: `/dellabel MOV`", parse_mode="Markdown")
-
-    prefix = context.args[0].upper().strip()[:3]
-    rec = await prefix_labels_col.find_one({"prefix": prefix})
-    if not rec:
-        return await update.message.reply_text(f"ℹ️ Prefix `{prefix}` has no assigned title or category.", parse_mode="Markdown")
-
-    old_title = rec.get("name", prefix)
-    old_cat = rec.get("category", "unknown").upper()
-    await prefix_labels_col.delete_one({"prefix": prefix})
-
-    asset_count = await codes_col.count_documents({"code": {"$regex": f"^{re.escape(prefix)}"}}) if codes_col is not None else 0
-    await update.message.reply_text(
-        f"🗑️ **Label Removed!**\n"
-        f"Partition `{prefix}` (`{old_title}` [{old_cat}]) unlinked.\n"
-        f"📦 `{asset_count}` asset(s) in database remain preserved.",
-        parse_mode="Markdown"
-    )
-    await log_event(ADMIN_ID, "ADMIN", f"Deleted label: {prefix}")
-    await notify_admin(context, f"🏷️ Admin removed title/category label from `{prefix}` ({asset_count} assets kept).")
-
-
-async def set_tmdb_metadata(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin command to specifically search and link TMDB metadata to a prefix partition."""
-    if update.effective_user.id != ADMIN_ID or prefix_labels_col is None: return
-    if len(context.args) < 2:
-        return await update.message.reply_text(
-            "❌ **Usage:** `/tmdb PREFIX <TITLE or TMDB_ID>`\n\n"
-            "**Examples:**\n"
-            "• `/tmdb SLV A Silent Voice (2016)`\n"
-            "• `/tmdb SLV 378064` (Direct TMDB ID)\n"
-            "• `/tmdb SLV tmdb:378064`",
-            parse_mode="Markdown"
-        )
-    
-    prefix = context.args[0].upper().strip()[:3]
-    query = " ".join(context.args[1:]).strip()
-    
-    label_rec = await prefix_labels_col.find_one({"prefix": prefix})
-    if not label_rec:
-        return await update.message.reply_text(
-            f"❌ Prefix `{prefix}` is not labeled yet!\n"
-            f"Please run `/setlabel {prefix} <MOVIE|SERIES> <TITLE>` first to define its category.",
-            parse_mode="Markdown"
-        )
-        
-    category = label_rec.get("category", "movie")
-    status_msg = await update.message.reply_text(f"🔍 Searching TMDB for `{query}` [{category.upper()}]...", parse_mode="Markdown")
-    
-    tmdb_info = await fetch_tmdb_metadata(query, category)
-    if not tmdb_info:
-        return await status_msg.edit_text(
-            f"❌ No TMDB matches found for `{query}` under category `{category}`.\n"
-            f"💡 *Tip:* Try providing the release year (e.g. `2016`) or direct TMDB ID.",
-            parse_mode="Markdown"
-        )
-        
-    await prefix_labels_col.update_one({"prefix": prefix}, {"$set": {"tmdb": tmdb_info}})
-    
-    year_str = f" ({tmdb_info['year']})" if tmdb_info.get("year") else ""
-    genres_str = f"\n🎭 **Genres:** {tmdb_info['genres']}" if tmdb_info.get("genres") else ""
-    rating_str = f"\n⭐ **Rating:** `{tmdb_info['rating']}/10`" if tmdb_info.get("rating") else ""
-    poster_note = "\n🖼️ **Official Poster:** Attached" if tmdb_info.get("poster_url") else ""
-    overview_snippet = f"\n\n📖 **Overview:**\n_{tmdb_info['overview'][:200]}..._" if tmdb_info.get("overview") else ""
-    
-    await status_msg.edit_text(
-        f"✅ **TMDB Synced for `{prefix}`!**\n\n"
-        f"🎬 **Matched:** **{tmdb_info['title']}**{year_str}"
-        f"{rating_str}"
-        f"{genres_str}"
-        f"{poster_note}"
-        f"{overview_snippet}\n\n"
-        f"*(Official poster and metadata are now linked to `{prefix}`)*",
-        parse_mode="Markdown"
-    )
-    await log_event(ADMIN_ID, "ADMIN", f"TMDB set for {prefix}: {tmdb_info['title']}")
-    await notify_admin(context, f"🎬 TMDB metadata linked to `{prefix}`: {tmdb_info['title']}.")
-
-
-async def delete_tmdb_metadata(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin command to remove TMDB metadata from a prefix partition."""
-    if update.effective_user.id != ADMIN_ID or prefix_labels_col is None: return
-    if not context.args:
-        return await update.message.reply_text("❌ Usage: `/deltmdb PREFIX`", parse_mode="Markdown")
-        
-    prefix = context.args[0].upper().strip()[:3]
-    res = await prefix_labels_col.update_one({"prefix": prefix}, {"$unset": {"tmdb": ""}})
-    if res.modified_count > 0:
-        await update.message.reply_text(f"🗑️ Removed TMDB metadata from `{prefix}`.", parse_mode="Markdown")
-        await log_event(ADMIN_ID, "ADMIN", f"Deleted TMDB for {prefix}")
-        await notify_admin(context, f"🎬 Admin cleared TMDB metadata from `{prefix}`.")
-    else:
-        await update.message.reply_text(f"ℹ️ Prefix `{prefix}` had no TMDB metadata.", parse_mode="Markdown")
-
-
-async def set_season_mapping(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID or prefix_labels_col is None: return
-    if len(context.args) < 4: return await update.message.reply_text("❌ Usage: `/setseason PREFIX SEASON_NUM START END`")
-    
-    try:
-        prefix = context.args[0].upper().strip()[:3]
-        sn_num = int(context.args[1])
-        start = int(context.args[2])
-        end = int(context.args[3])
-        
-        season_obj = {"num": sn_num, "start": start, "end": end}
-        rec = await prefix_labels_col.find_one({"prefix": prefix})
-        if not rec: return await update.message.reply_text(f"❌ Prefix `{prefix}` not labeled.")
-            
-        seasons = rec.get("seasons", [])
-        seasons = [s for s in seasons if s["num"] != sn_num]
-        seasons.append(season_obj)
-        seasons.sort(key=lambda x: x["num"])
-        
-        await prefix_labels_col.update_one({"prefix": prefix}, {"$set": seasons})
-        await update.message.reply_text(f"✅ Season {sn_num} mapped for `{prefix}`.", parse_mode="Markdown")
-        
-    except ValueError:
-        await update.message.reply_text("❌ Numbers required for SN/START/END.")
-
-
-async def delete_season_mapping(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID or prefix_labels_col is None: return
-    if len(context.args) < 2: return await update.message.reply_text("❌ Usage: `/delseason PREFIX SEASON_NUM`")
-    try:
-        prefix = context.args[0].upper().strip()[:3]
-        sn_num = int(context.args[1])
-        rec = await prefix_labels_col.find_one({"prefix": prefix})
-        if not rec or "seasons" not in rec: return await update.message.reply_text(f"❌ No seasons found.")
-        seasons = [s for s in rec["seasons"] if s["num"] != sn_num]
-        await prefix_labels_col.update_one({"prefix": prefix}, {"$set": {"seasons": seasons}})
-        await update.message.reply_text(f"🗑️ Season {sn_num} deleted for `{prefix}`.")
-    except: pass
-
-
-async def clear_all_seasons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID or prefix_labels_col is None: return
-    if not context.args: return
-    prefix = context.args[0].upper().strip()[:3]
-    await prefix_labels_col.update_one({"prefix": prefix}, {"$unset": {"seasons": ""}})
-    await update.message.reply_text(f"🔥 Seasons wiped for `{prefix}`.")
+    await notify_admin(context, f"📊 Metadata Sync complete. <code>{file_sync_count}</code> files and <code>{tmdb_sync_count}</code> TMDB records enriched.")
 
 
 async def weekly_backup_job(context: ContextTypes.DEFAULT_TYPE):
