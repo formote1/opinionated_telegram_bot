@@ -46,6 +46,9 @@ from handlers.admin import (
     set_group_key,
     unset_group_key,
     set_prefix_label,
+    delete_prefix_label,
+    set_tmdb_metadata,
+    delete_tmdb_metadata,
     set_season_mapping,
     delete_season_mapping,
     clear_all_seasons,
@@ -93,6 +96,10 @@ def create_application():
     app.add_handler(CommandHandler("unsetkey", unset_group_key))
     app.add_handler(CommandHandler("delkey", unset_group_key))
     app.add_handler(CommandHandler("setlabel", set_prefix_label))
+    app.add_handler(CommandHandler("dellabel", delete_prefix_label))
+    app.add_handler(CommandHandler("unsetlabel", delete_prefix_label))
+    app.add_handler(CommandHandler("tmdb", set_tmdb_metadata))
+    app.add_handler(CommandHandler("deltmdb", delete_tmdb_metadata))
     app.add_handler(CommandHandler("setseason", set_season_mapping))
     app.add_handler(CommandHandler("delseason", delete_season_mapping))
     app.add_handler(CommandHandler("clearseasons", clear_all_seasons))

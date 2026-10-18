@@ -78,7 +78,10 @@ async def admin_palette_msg():
         "• `/del CODE` - Single file delete\n"
         "• `/del PREFIX START END` - Surgical range delete\n"
         "• `/setkey PREFIX PASSWORD` - Secure prefix partition\n"
-        "• `/setlabel PREFIX CAT TITLE` - Assign title, category & TMDB sync\n"
+        "• `/setlabel PREFIX CAT TITLE` - Assign title & category\n"
+        "• `/dellabel PREFIX` - Remove title & category partition\n"
+        "• `/tmdb PREFIX QUERY/ID` - Fetch & link TMDB metadata\n"
+        "• `/deltmdb PREFIX` - Unlink TMDB metadata\n"
         "• `/setseason PREFIX SN START END` - Map season range\n"
         "• `/delseason PREFIX SN` - Delete specific season\n"
         "• `/clearseasons PREFIX` - Wipe all seasons\n"
@@ -488,7 +491,9 @@ async def get_key_matrix(update: Update, context: ContextTypes.DEFAULT_TYPE):
             prefix, chat_id, count = r['_id']['prefix'], r['_id']['chat_id'], r['count']
             key_record = await group_keys_col.find_one({"chat_id": chat_id, "prefix": prefix})
             passkey = html.escape(key_record["secret_key"] if key_record else "NO KEY SET")
-            report.append(f"• <code>{prefix}</code> - {count:02d} items  =>  <code>{passkey}</code>")
+            label_doc = await prefix_labels_col.find_one({"prefix": prefix}) if prefix_labels_col is not None else None
+            label_name = html.escape(label_doc.get("name", "Unlabeled")) if label_doc else "Unlabeled"
+            report.append(f"• <code>{prefix}</code> - {count:02d} items  =&gt;  <b>{label_name}</b>  &lt;=  <code>{passkey}</code>")
         await update.effective_message.reply_text("\n".join(report), parse_mode="HTML")
     except Exception as e:
         logger.error(f"Key Matrix error: {e}")
@@ -661,70 +666,33 @@ async def refresh_metadata(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.warning(f"File probe failed for {record.get('code')}: {e}")
                 continue
 
-    # 2. Discover unmapped prefixes from existing files in codes_col
-    auto_discovered_count = 0
-    if prefix_labels_col is not None:
-        try:
-            distinct_codes = await codes_col.distinct("code")
-            unique_prefixes = sorted(list(set(c[:3].upper() for c in distinct_codes if c and len(c) >= 3)))
-            for pfx in unique_prefixes:
-                existing_doc = await prefix_labels_col.find_one({"prefix": pfx})
-                if not existing_doc:
-                    sample_file = await codes_col.find_one({"code": {"$regex": f"^{re.escape(pfx)}"}})
-                    raw_title = ""
-                    if sample_file:
-                        raw_title = sample_file.get("file_name") or sample_file.get("caption") or ""
-                    cleaned = clean_title_for_search(raw_title) or pfx
-                    is_series = bool(re.search(r's\d+|season|ep\d+|episode', raw_title, re.IGNORECASE))
-                    cat = "series" if is_series else "movie"
-                    tmdb_info = await fetch_tmdb_metadata(cleaned, cat)
-                    new_label = {
-                        "prefix": pfx,
-                        "name": (tmdb_info.get("title") if tmdb_info else cleaned) or pfx,
-                        "category": cat,
-                        "seasons": []
-                    }
-                    if tmdb_info:
-                        new_label["tmdb"] = tmdb_info
-                    await prefix_labels_col.update_one({"prefix": pfx}, {"$set": new_label}, upsert=True)
-                    auto_discovered_count += 1
-                    await asyncio.sleep(0.2)
-        except Exception as e:
-            logger.warning(f"Prefix auto-discovery error during sync: {e}")
-
-    # 3. Comprehensive TMDB metadata enrichment for ALL existing titles/prefixes
+    # 2. Refresh TMDB metadata ONLY for titles that have explicitly linked TMDB records
     tmdb_sync_count = 0
     total_labels = 0
     if prefix_labels_col is not None:
-        total_labels = await prefix_labels_col.count_documents({})
-        label_cursor = prefix_labels_col.find({})
-        processed = 0
-        async for label_doc in label_cursor:
-            processed += 1
-            name = label_doc.get("name")
-            cat = label_doc.get("category", "movie")
-            
-            # Fetch / refresh TMDB metadata (banner, poster, backdrop, overview, rating)
-            if name:
-                tmdb_info = await fetch_tmdb_metadata(name, cat)
-                if not tmdb_info:
-                    cleaned_name = clean_title_for_search(name)
-                    if cleaned_name and cleaned_name.lower() != name.lower():
-                        tmdb_info = await fetch_tmdb_metadata(cleaned_name, cat)
-
-                if tmdb_info:
-                    update_data = {"tmdb": tmdb_info}
-                    # If existing name was just the prefix code, replace with official title
-                    if name == label_doc.get("prefix") and tmdb_info.get("title"):
-                        update_data["name"] = tmdb_info["title"]
-                    await prefix_labels_col.update_one({"_id": label_doc["_id"]}, {"$set": update_data})
-                    tmdb_sync_count += 1
+        query_with_tmdb = {"tmdb": {"$exists": True, "$ne": None}}
+        total_labels = await prefix_labels_col.count_documents(query_with_tmdb)
+        if total_labels > 0:
+            label_cursor = prefix_labels_col.find(query_with_tmdb)
+            processed = 0
+            async for label_doc in label_cursor:
+                processed += 1
+                name = label_doc.get("name")
+                cat = label_doc.get("category", "movie")
+                existing_tmdb = label_doc.get("tmdb") or {}
+                query_target = str(existing_tmdb.get("tmdb_id")) if existing_tmdb.get("tmdb_id") else name
+                
+                if query_target:
+                    tmdb_info = await fetch_tmdb_metadata(query_target, cat)
+                    if tmdb_info:
+                        await prefix_labels_col.update_one({"_id": label_doc["_id"]}, {"$set": {"tmdb": tmdb_info}})
+                        tmdb_sync_count += 1
 
                 if (processed % 3 == 0) or processed == total_labels:
                     await status_msg.edit_text(
-                        f"🔄 **Syncing TMDB Metadata...**\n"
-                        f"`{processed}/{total_labels}` titles evaluated.\n"
-                        f"Enriched: `{tmdb_sync_count}`",
+                        f"🔄 **Refreshing Linked TMDB Metadata...**\n"
+                        f"`{processed}/{total_labels}` titles checked.\n"
+                        f"Updated: `{tmdb_sync_count}`",
                         parse_mode="Markdown"
                     )
                 await asyncio.sleep(0.25)
@@ -732,10 +700,8 @@ async def refresh_metadata(update: Update, context: ContextTypes.DEFAULT_TYPE):
     summary_lines = [
         "✅ **Sync Finalized!**",
         f"• Files probed/updated: `{file_sync_count}`",
-        f"• Existing titles enriched with TMDB: `{tmdb_sync_count}`",
+        f"• Handpicked TMDB records refreshed: `{tmdb_sync_count}`",
     ]
-    if auto_discovered_count > 0:
-        summary_lines.append(f"• New prefixes auto-discovered: `{auto_discovered_count}`")
 
     await status_msg.edit_text("\n".join(summary_lines), parse_mode="Markdown")
     await log_event(ADMIN_ID, "ADMIN", f"Metadata Sync: {file_sync_count} files, {tmdb_sync_count} TMDB records")
@@ -821,17 +787,115 @@ async def set_prefix_label(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text("❌ Category must be **MOVIE** or **SERIES**.")
         
     set_doc = {"name": name, "category": category.lower()}
-    
-    # Query TMDB for poster, synopsis, rating
-    tmdb_info = await fetch_tmdb_metadata(name, category.lower())
-    tmdb_note = ""
-    if tmdb_info:
-        set_doc["tmdb"] = tmdb_info
-        year_str = f" ({tmdb_info['year']})" if tmdb_info.get("year") else ""
-        tmdb_note = f"\n🎬 **TMDB Match:** {tmdb_info['title']}{year_str} ⭐ `{tmdb_info['rating']}/10`"
-        
     await prefix_labels_col.update_one({"prefix": prefix}, {"$set": set_doc}, upsert=True)
-    await update.message.reply_text(f"🏷️ Label set: `{prefix}` [{category}] ➔ **{name}**{tmdb_note}", parse_mode="Markdown")
+    await update.message.reply_text(
+        f"🏷️ **Handpicked Label Set!**\n"
+        f"Partition `{prefix}` [{category}] ➔ **{name}**\n\n"
+        f"💡 *To link specific TMDB metadata & poster:* `/tmdb {prefix} <title or ID>`",
+        parse_mode="Markdown"
+    )
+    await log_event(ADMIN_ID, "ADMIN", f"Set Label: {prefix} -> {name} [{category}]")
+    await notify_admin(context, f"🏷️ Admin assigned label `{prefix}` ➔ {name} [{category}].")
+
+
+async def delete_prefix_label(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin command to remove title, category, and TMDB metadata from a prefix partition."""
+    if update.effective_user.id != ADMIN_ID or prefix_labels_col is None:
+        return
+    if not context.args:
+        return await update.message.reply_text("❌ Usage: `/dellabel PREFIX`\nExample: `/dellabel MOV`", parse_mode="Markdown")
+
+    prefix = context.args[0].upper().strip()[:3]
+    rec = await prefix_labels_col.find_one({"prefix": prefix})
+    if not rec:
+        return await update.message.reply_text(f"ℹ️ Prefix `{prefix}` has no assigned title or category.", parse_mode="Markdown")
+
+    old_title = rec.get("name", prefix)
+    old_cat = rec.get("category", "unknown").upper()
+    await prefix_labels_col.delete_one({"prefix": prefix})
+
+    asset_count = await codes_col.count_documents({"code": {"$regex": f"^{re.escape(prefix)}"}}) if codes_col is not None else 0
+    await update.message.reply_text(
+        f"🗑️ **Label Removed!**\n"
+        f"Partition `{prefix}` (`{old_title}` [{old_cat}]) unlinked.\n"
+        f"📦 `{asset_count}` asset(s) in database remain preserved.",
+        parse_mode="Markdown"
+    )
+    await log_event(ADMIN_ID, "ADMIN", f"Deleted label: {prefix}")
+    await notify_admin(context, f"🏷️ Admin removed title/category label from `{prefix}` ({asset_count} assets kept).")
+
+
+async def set_tmdb_metadata(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin command to specifically search and link TMDB metadata to a prefix partition."""
+    if update.effective_user.id != ADMIN_ID or prefix_labels_col is None: return
+    if len(context.args) < 2:
+        return await update.message.reply_text(
+            "❌ **Usage:** `/tmdb PREFIX <TITLE or TMDB_ID>`\n\n"
+            "**Examples:**\n"
+            "• `/tmdb SLV A Silent Voice (2016)`\n"
+            "• `/tmdb SLV 378064` (Direct TMDB ID)\n"
+            "• `/tmdb SLV tmdb:378064`",
+            parse_mode="Markdown"
+        )
+    
+    prefix = context.args[0].upper().strip()[:3]
+    query = " ".join(context.args[1:]).strip()
+    
+    label_rec = await prefix_labels_col.find_one({"prefix": prefix})
+    if not label_rec:
+        return await update.message.reply_text(
+            f"❌ Prefix `{prefix}` is not labeled yet!\n"
+            f"Please run `/setlabel {prefix} <MOVIE|SERIES> <TITLE>` first to define its category.",
+            parse_mode="Markdown"
+        )
+        
+    category = label_rec.get("category", "movie")
+    status_msg = await update.message.reply_text(f"🔍 Searching TMDB for `{query}` [{category.upper()}]...", parse_mode="Markdown")
+    
+    tmdb_info = await fetch_tmdb_metadata(query, category)
+    if not tmdb_info:
+        return await status_msg.edit_text(
+            f"❌ No TMDB matches found for `{query}` under category `{category}`.\n"
+            f"💡 *Tip:* Try providing the release year (e.g. `2016`) or direct TMDB ID.",
+            parse_mode="Markdown"
+        )
+        
+    await prefix_labels_col.update_one({"prefix": prefix}, {"$set": {"tmdb": tmdb_info}})
+    
+    year_str = f" ({tmdb_info['year']})" if tmdb_info.get("year") else ""
+    genres_str = f"\n🎭 **Genres:** {tmdb_info['genres']}" if tmdb_info.get("genres") else ""
+    rating_str = f"\n⭐ **Rating:** `{tmdb_info['rating']}/10`" if tmdb_info.get("rating") else ""
+    poster_note = "\n🖼️ **Official Poster:** Attached" if tmdb_info.get("poster_url") else ""
+    overview_snippet = f"\n\n📖 **Overview:**\n_{tmdb_info['overview'][:200]}..._" if tmdb_info.get("overview") else ""
+    
+    await status_msg.edit_text(
+        f"✅ **TMDB Synced for `{prefix}`!**\n\n"
+        f"🎬 **Matched:** **{tmdb_info['title']}**{year_str}"
+        f"{rating_str}"
+        f"{genres_str}"
+        f"{poster_note}"
+        f"{overview_snippet}\n\n"
+        f"*(Official poster and metadata are now linked to `{prefix}`)*",
+        parse_mode="Markdown"
+    )
+    await log_event(ADMIN_ID, "ADMIN", f"TMDB set for {prefix}: {tmdb_info['title']}")
+    await notify_admin(context, f"🎬 TMDB metadata linked to `{prefix}`: {tmdb_info['title']}.")
+
+
+async def delete_tmdb_metadata(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin command to remove TMDB metadata from a prefix partition."""
+    if update.effective_user.id != ADMIN_ID or prefix_labels_col is None: return
+    if not context.args:
+        return await update.message.reply_text("❌ Usage: `/deltmdb PREFIX`", parse_mode="Markdown")
+        
+    prefix = context.args[0].upper().strip()[:3]
+    res = await prefix_labels_col.update_one({"prefix": prefix}, {"$unset": {"tmdb": ""}})
+    if res.modified_count > 0:
+        await update.message.reply_text(f"🗑️ Removed TMDB metadata from `{prefix}`.", parse_mode="Markdown")
+        await log_event(ADMIN_ID, "ADMIN", f"Deleted TMDB for {prefix}")
+        await notify_admin(context, f"🎬 Admin cleared TMDB metadata from `{prefix}`.")
+    else:
+        await update.message.reply_text(f"ℹ️ Prefix `{prefix}` had no TMDB metadata.", parse_mode="Markdown")
 
 
 async def set_season_mapping(update: Update, context: ContextTypes.DEFAULT_TYPE):
