@@ -84,7 +84,8 @@ async def admin_palette_msg():
         "• <code>/file save PREFIX START END</code> - Forward mass index\n"
         "• <code>/file del CODE</code> - Delete single asset\n"
         "• <code>/file del PREFIX START END</code> - Surgical range delete\n"
-        "• <code>/file lock PREFIX PASSWORD</code> - Secure partition with passkey\n"
+        "• <code>/file lock PREFIX|0 PASSWORD</code> - Lock partition (0 = all unlocked)\n"
+        "• <code>/file lock PREFIX OLD_PASS NEW_PASS</code> - Rotate passkey\n"
         "• <code>/file unlock PREFIX</code> - Remove passkey partition\n"
         "• <code>/file mv OLD NEW</code> - Bulk migrate/rename prefix\n"
         "</blockquote>\n\n"
@@ -94,7 +95,7 @@ async def admin_palette_msg():
         "• <code>/media label del PREFIX</code> - Remove partition label\n"
         "• <code>/media tmdb set PREFIX QUERY/ID</code> - Link TMDB metadata\n"
         "• <code>/media tmdb del PREFIX</code> - Unlink TMDB metadata\n"
-        "• <code>/media banner PREFIX toggle</code> - Flip poster / backdrop\n"
+        "• <code>/media banner PREFIX [toggle|URL|reset]</code> - Custom banner, toggle, or reset\n"
         "• <code>/media season set PREFIX SN START END</code> - Map season range\n"
         "• <code>/media season del PREFIX SN</code> - Delete specific season\n"
         "• <code>/media season clear PREFIX</code> - Wipe all seasons\n"
@@ -125,7 +126,7 @@ async def show_admin_media_menu(update: Update, context: ContextTypes.DEFAULT_TY
         "• <code>/media label del PREFIX</code> — Remove partition label\n"
         "• <code>/media tmdb set PREFIX QUERY/ID</code> — Link TMDB metadata\n"
         "• <code>/media tmdb del PREFIX</code> — Unlink TMDB metadata\n"
-        "• <code>/media banner PREFIX toggle</code> — Flip poster / backdrop\n"
+        "• <code>/media banner PREFIX [toggle|URL|reset]</code> — Custom banner, toggle, or reset\n"
         "• <code>/media season set PREFIX SN START END</code> — Map season episode range\n"
         "• <code>/media season del PREFIX SN</code> — Delete specific season\n"
         "• <code>/media season clear PREFIX</code> — Clear all mapped seasons\n"
@@ -147,7 +148,8 @@ async def show_admin_security_menu(update: Update, context: ContextTypes.DEFAULT
         "🔐 <b>ACCESS & SECURITY MANAGEMENT</b>\n"
         "─────────────────────────────────\n"
         "<b>Available Commands:</b>\n"
-        "• <code>/file lock PREFIX PASSWORD</code> — Lock prefix with passkey partition\n"
+        "• <code>/file lock PREFIX PASSWORD</code> — Lock partition (0 = all unlocked)\n"
+        "• <code>/file lock PREFIX OLD_PASS NEW_PASS</code> — Change/rotate passkey\n"
         "• <code>/file unlock PREFIX</code> — Remove passkey partition\n"
         "• <code>/user grant &lt;USER_ID|@username&gt; &lt;PREFIX|0&gt; [DURATION]</code>\n"
         "• <code>/user revoke &lt;USER_ID|@username&gt; &lt;PREFIX|0&gt;</code>\n"
@@ -682,7 +684,8 @@ async def file_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE
             "• <code>/file save &lt;PREFIX&gt; &lt;START&gt; &lt;END&gt;</code> - Forward mass index range\n"
             "• <code>/file del &lt;CODE&gt;</code> - Delete single asset\n"
             "• <code>/file del &lt;PREFIX&gt; &lt;START&gt; &lt;END&gt;</code> - Surgical range delete\n"
-            "• <code>/file lock &lt;PREFIX&gt; &lt;PASSWORD&gt;</code> - Secure partition with passkey\n"
+            "• <code>/file lock &lt;PREFIX|0&gt; &lt;PASSWORD&gt;</code> - Secure partition (0 = all unlocked)\n"
+            "• <code>/file lock &lt;PREFIX|0&gt; &lt;OLD_PASS&gt; &lt;NEW_PASS&gt;</code> - Rotate/change passkey\n"
             "• <code>/file unlock &lt;PREFIX&gt;</code> - Remove passkey partition\n"
             "• <code>/file mv &lt;OLD&gt; &lt;NEW&gt;</code> - Bulk migrate/rename prefix"
         )
@@ -810,14 +813,88 @@ async def file_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     elif sub == "lock":
         if len(args) < 3:
-            return await update.message.reply_text("❌ Usage: <code>/file lock &lt;PREFIX&gt; &lt;PASSWORD&gt;</code>", parse_mode="HTML")
-        prefix = args[1].upper().strip()[:3]
-        password = args[2].strip()
-        if group_keys_col is not None:
-            await group_keys_col.update_one({"chat_id": update.effective_chat.id, "prefix": prefix}, {"$set": {"secret_key": password}}, upsert=True)
-        await update.message.reply_text(f"🔒 Partition <code>{prefix}</code> locked with passkey!", parse_mode="HTML")
-        await log_event(ADMIN_ID, "ADMIN", f"Locked prefix: {prefix}")
-        await notify_admin(context, f"🔒 Access key set for <code>{prefix}</code>.")
+            return await update.message.reply_text(
+                "❌ <b>Usage for /file lock:</b>\n"
+                "• Lock single: <code>/file lock &lt;PREFIX&gt; &lt;PASSWORD&gt;</code>\n"
+                "• Lock all unlocked: <code>/file lock 0 &lt;PASSWORD&gt;</code>\n"
+                "• Change password: <code>/file lock &lt;PREFIX&gt; &lt;OLD_PASS&gt; &lt;NEW_PASS&gt;</code>",
+                parse_mode="HTML"
+            )
+
+        if len(args) >= 4:
+            # Change/rotate passkey: /file lock PREFIX OLD_PASSWD NEW_PASSWD
+            target_prefix = args[1].upper().strip()
+            old_pass = args[2].strip()
+            new_pass = args[3].strip()
+
+            if target_prefix == "0":
+                res = await group_keys_col.update_many({"secret_key": old_pass}, {"$set": {"secret_key": new_pass}})
+                if res.modified_count > 0:
+                    await update.message.reply_text(f"🔑 <b>Password Updated!</b> Rotated passkey for <b>{res.modified_count}</b> partition(s).", parse_mode="HTML")
+                    await log_event(ADMIN_ID, "ADMIN", f"Rotated passkey for {res.modified_count} partitions")
+                    await notify_admin(context, f"🔑 Rotated passkey for <b>{res.modified_count}</b> partitions.")
+                else:
+                    await update.message.reply_text("❌ No locked partitions matched the provided OLD_PASSWORD.", parse_mode="HTML")
+            else:
+                pfx = target_prefix[:3]
+                gate = await group_keys_col.find_one({"prefix": pfx})
+                if not gate:
+                    return await update.message.reply_text(f"❌ Partition <code>{pfx}</code> is not locked yet. Use <code>/file lock {pfx} &lt;PASSWORD&gt;</code> first.", parse_mode="HTML")
+                if gate.get("secret_key") != old_pass:
+                    return await update.message.reply_text(f"❌ Incorrect OLD_PASSWORD for partition <code>{pfx}</code>.", parse_mode="HTML")
+
+                await group_keys_col.update_one({"prefix": pfx}, {"$set": {"secret_key": new_pass}})
+                await update.message.reply_text(f"🔑 <b>Password Changed!</b> Partition <code>{pfx}</code> passkey updated successfully.", parse_mode="HTML")
+                await log_event(ADMIN_ID, "ADMIN", f"Changed key for {pfx}")
+                await notify_admin(context, f"🔑 Passkey for partition <code>{pfx}</code> updated.")
+
+        else:
+            # /file lock PREFIX PASSWORD
+            target_prefix = args[1].upper().strip()
+            password = args[2].strip()
+
+            if target_prefix == "0":
+                # Lock every unlocked partition
+                pipeline = [{"$project": {"prefix": {"$substr": ["$code", 0, 3]}}}, {"$group": {"_id": "$prefix"}}]
+                all_pref_docs = await codes_col.aggregate(pipeline).to_list(length=1000)
+                all_prefixes = {doc["_id"] for doc in all_pref_docs if doc.get("_id")}
+
+                if prefix_labels_col is not None:
+                    label_docs = await prefix_labels_col.find({}).to_list(length=1000)
+                    for ld in label_docs:
+                        if ld.get("prefix"):
+                            all_prefixes.add(ld["prefix"])
+
+                locked_docs = await group_keys_col.find({}).to_list(length=1000) if group_keys_col is not None else []
+                locked_prefixes = {d["prefix"] for d in locked_docs if d.get("prefix")}
+
+                unlocked_prefixes = sorted(list(all_prefixes - locked_prefixes))
+                if not unlocked_prefixes:
+                    return await update.message.reply_text("ℹ️ All partitions are already locked.", parse_mode="HTML")
+
+                for pfx in unlocked_prefixes:
+                    await group_keys_col.update_one(
+                        {"chat_id": update.effective_chat.id, "prefix": pfx},
+                        {"$set": {"secret_key": password}},
+                        upsert=True
+                    )
+
+                pfx_list_str = ", ".join(f"<code>{p}</code>" for p in unlocked_prefixes)
+                await update.message.reply_text(
+                    f"🔒 <b>All Unlocked Partitions Locked!</b>\n"
+                    f"Secured <b>{len(unlocked_prefixes)}</b> partition(s): {pfx_list_str}\n"
+                    f"Passkey: <code>{html.escape(password)}</code>",
+                    parse_mode="HTML"
+                )
+                await log_event(ADMIN_ID, "ADMIN", f"Locked {len(unlocked_prefixes)} unlocked partitions")
+                await notify_admin(context, f"🔒 Locked {len(unlocked_prefixes)} previously unlocked partitions.")
+            else:
+                pfx = target_prefix[:3]
+                if group_keys_col is not None:
+                    await group_keys_col.update_one({"chat_id": update.effective_chat.id, "prefix": pfx}, {"$set": {"secret_key": password}}, upsert=True)
+                await update.message.reply_text(f"🔒 Partition <code>{pfx}</code> locked with passkey!", parse_mode="HTML")
+                await log_event(ADMIN_ID, "ADMIN", f"Locked prefix: {pfx}")
+                await notify_admin(context, f"🔒 Access key set for <code>{pfx}</code>.")
 
     elif sub == "unlock":
         if len(args) < 2:
@@ -880,7 +957,7 @@ async def media_command_router(update: Update, context: ContextTypes.DEFAULT_TYP
             "• <code>/media label del &lt;PREFIX&gt;</code> - Remove partition label\n"
             "• <code>/media tmdb set &lt;PREFIX&gt; &lt;QUERY/ID&gt;</code> - Link TMDB metadata & poster\n"
             "• <code>/media tmdb del &lt;PREFIX&gt;</code> - Unlink TMDB metadata\n"
-            "• <code>/media banner &lt;PREFIX&gt; toggle</code> - Toggle official poster vs backdrop\n"
+            "• <code>/media banner &lt;PREFIX&gt; [toggle|URL|reset]</code> - Custom banner, toggle, or reset\n"
             "• <code>/media season set &lt;PREFIX&gt; &lt;SN&gt; &lt;START&gt; &lt;END&gt;</code> - Map season episode range\n"
             "• <code>/media season del &lt;PREFIX&gt; &lt;SN&gt;</code> - Delete specific season\n"
             "• <code>/media season clear &lt;PREFIX&gt;</code> - Clear all mapped seasons\n"
@@ -997,25 +1074,77 @@ async def media_command_router(update: Update, context: ContextTypes.DEFAULT_TYP
 
     elif sub == "banner":
         if len(args) < 2:
-            return await update.message.reply_text("❌ Usage: <code>/media banner &lt;PREFIX&gt; toggle</code>", parse_mode="HTML")
-        if args[1].lower() == "toggle" and len(args) > 2:
+            return await update.message.reply_text(
+                "❌ <b>Usage for /media banner:</b>\n"
+                "• Toggle TMDB: <code>/media banner &lt;PREFIX&gt; toggle</code>\n"
+                "• Set Custom URL: <code>/media banner &lt;PREFIX&gt; &lt;URL&gt;</code>\n"
+                "• Reset custom: <code>/media banner &lt;PREFIX&gt; reset</code>\n"
+                "• Or reply to a photo with <code>/media banner &lt;PREFIX&gt;</code>",
+                parse_mode="HTML"
+            )
+
+        if args[1].lower() == "set":
+            if len(args) < 3:
+                return await update.message.reply_text("❌ Usage: <code>/media banner set &lt;PREFIX&gt; &lt;URL&gt;</code>", parse_mode="HTML")
             prefix = args[2].upper().strip()[:3]
+            custom_url = args[3].strip() if len(args) > 3 else ""
+        elif args[1].lower() == "toggle" and len(args) > 2:
+            prefix = args[2].upper().strip()[:3]
+            custom_url = "toggle"
         else:
             prefix = args[1].upper().strip()[:3]
+            custom_url = args[2].strip() if len(args) > 2 else ""
 
         rec = await prefix_labels_col.find_one({"prefix": prefix})
         if not rec:
-            return await update.message.reply_text(f"❌ Prefix <code>{prefix}</code> not found in library.", parse_mode="HTML")
-        current_mode = rec.get("banner_mode", "poster")
-        new_mode = "backdrop" if current_mode == "poster" else "poster"
-        await prefix_labels_col.update_one({"prefix": prefix}, {"$set": {"banner_mode": new_mode}})
-        await update.message.reply_text(
-            f"🖼️ <b>Banner Mode Toggled!</b>\n"
-            f"Partition <code>{prefix}</code> is now set to: <b>{new_mode.upper()}</b> (was {current_mode.upper()}).",
-            parse_mode="HTML"
-        )
-        await log_event(ADMIN_ID, "ADMIN", f"Banner toggled for {prefix}: {new_mode}")
-        await notify_admin(context, f"🖼️ Banner mode for <code>{prefix}</code> toggled to <b>{new_mode.upper()}</b>.")
+            return await update.message.reply_text(f"❌ Partition <code>{prefix}</code> not found in library.", parse_mode="HTML")
+
+        # Check if replying to a photo or message containing a URL
+        if not custom_url and update.message.reply_to_message:
+            reply = update.message.reply_to_message
+            if reply.photo:
+                photo_file = await context.bot.get_file(reply.photo[-1].file_id)
+                custom_url = f"https://api.telegram.org/file/bot{context.bot.token}/{photo_file.file_path}"
+            elif reply.text and reply.text.startswith("http"):
+                custom_url = reply.text.strip()
+            elif reply.caption and reply.caption.startswith("http"):
+                custom_url = reply.caption.strip()
+
+        if custom_url.lower() == "toggle":
+            current_mode = rec.get("banner_mode", "poster")
+            new_mode = "backdrop" if current_mode == "poster" else "poster"
+            await prefix_labels_col.update_one({"prefix": prefix}, {"$set": {"banner_mode": new_mode}, "$unset": {"custom_banner": ""}})
+            await update.message.reply_text(
+                f"🖼️ <b>Banner Mode Toggled!</b>\n"
+                f"Partition <code>{prefix}</code> set to TMDB <b>{new_mode.upper()}</b> (custom banner cleared).",
+                parse_mode="HTML"
+            )
+            await log_event(ADMIN_ID, "ADMIN", f"Banner toggled for {prefix}: {new_mode}")
+            await notify_admin(context, f"🖼️ Banner mode for <code>{prefix}</code> toggled to <b>{new_mode.upper()}</b>.")
+        elif custom_url.lower() in ["reset", "del", "clear"]:
+            await prefix_labels_col.update_one({"prefix": prefix}, {"$unset": {"custom_banner": ""}})
+            await update.message.reply_text(f"🗑️ <b>Custom Banner Cleared!</b> Partition <code>{prefix}</code> reverted to TMDB banner.", parse_mode="HTML")
+            await log_event(ADMIN_ID, "ADMIN", f"Custom banner cleared for {prefix}")
+        elif custom_url.startswith("http://") or custom_url.startswith("https://"):
+            await prefix_labels_col.update_one({"prefix": prefix}, {"$set": {"custom_banner": custom_url}})
+            await update.message.reply_text(
+                f"🖼️ <b>Custom Banner Set!</b>\n"
+                f"Partition <code>{prefix}</code> now uses custom banner:\n"
+                f"<a href=\"{custom_url}\">View Image Link</a>",
+                parse_mode="HTML",
+                disable_web_page_preview=False
+            )
+            await log_event(ADMIN_ID, "ADMIN", f"Custom banner set for {prefix}")
+            await notify_admin(context, f"🖼️ Custom banner set for <code>{prefix}</code>.")
+        else:
+            return await update.message.reply_text(
+                "❌ <b>Invalid banner option:</b>\n"
+                "• Toggle TMDB: <code>/media banner &lt;PREFIX&gt; toggle</code>\n"
+                "• Set Custom URL: <code>/media banner &lt;PREFIX&gt; https://...</code>\n"
+                "• Or reply to a photo with: <code>/media banner &lt;PREFIX&gt;</code>\n"
+                "• Reset: <code>/media banner &lt;PREFIX&gt; reset</code>",
+                parse_mode="HTML"
+            )
 
     elif sub == "season":
         action = args[1].lower() if len(args) > 1 else ""

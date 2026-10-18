@@ -108,12 +108,17 @@ async def handle_library_pick(update: Update, context: ContextTypes.DEFAULT_TYPE
     header_parts = []
     cat_icon = "🎬" if cat == "movie" else "📺"
 
-    if tmdb:
+    custom_banner = label_rec.get("custom_banner") if label_rec else None
+    if custom_banner:
+        banner_img_url = custom_banner
+    elif tmdb:
         banner_mode = label_rec.get("banner_mode", "poster") if label_rec else "poster"
         if banner_mode == "backdrop":
             banner_img_url = tmdb.get("backdrop_url") or tmdb.get("poster_url") or ""
         else:
             banner_img_url = tmdb.get("poster_url") or tmdb.get("backdrop_url") or ""
+
+    if tmdb:
         title_display = tmdb.get("title") or name
         year_display = f" ({tmdb['year']})" if tmdb.get("year") else ""
         header_parts.append(f"{cat_icon} **{title_display}**{year_display}")
@@ -172,8 +177,11 @@ async def handle_season_pick(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not season_obj: return await query.answer("Error.")
 
     tmdb = label_rec.get("tmdb") if label_rec else None
-    banner_mode = label_rec.get("banner_mode", "poster") if label_rec else "poster"
-    if tmdb:
+    custom_banner = label_rec.get("custom_banner") if label_rec else None
+    if custom_banner:
+        banner_img_url = custom_banner
+    elif tmdb:
+        banner_mode = label_rec.get("banner_mode", "poster") if label_rec else "poster"
         banner_img_url = (tmdb.get("backdrop_url") or tmdb.get("poster_url") or "") if banner_mode == "backdrop" else (tmdb.get("poster_url") or tmdb.get("backdrop_url") or "")
     else:
         banner_img_url = ""
