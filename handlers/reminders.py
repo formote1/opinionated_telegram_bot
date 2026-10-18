@@ -18,7 +18,7 @@ from utils.sentinel import log_event, notify_admin
 from utils.timezones import tf
 
 # Conversation States
-GET_TZ_CHOICE, GET_DATE, GET_TIME, GET_LABEL = range(4)
+GET_TZ_CHOICE, GET_DATE, GET_TIME, GET_LABEL, GET_BIRTHDAY_NAME = range(5)
 
 # --- GUI BUILDERS ---
 
@@ -103,67 +103,192 @@ def schedule_reminder_job(app, reminder_data):
 async def send_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
     data = job.data
-    try:
-        # 1. Double check that reminder has not been deleted from DB
-        if reminders_col is not None:
-            exists = await reminders_col.find_one({"_id": data['_id']})
-            if not exists:
-                job.schedule_removal()
-                return
-            data = exists
+    user_id = data.get("user_id") or job.chat_id
+    if reminders_col is None:
+        return
 
-        tz = pytz.timezone(data.get('timezone', 'UTC'))
-        now = datetime.now(tz).date()
-        target = datetime.strptime(data['target_date'], "%Y-%m-%d").date()
-        days_left = (target - now).days
-        
-        # 2. Windowing: Only send daily notifications if within 3 months (90 days)
-        if days_left > 90:
-            return
-            
-        if days_left >= 0:
-            if days_left > 0:
-                months = days_left // 30
-                rem_days = days_left % 30
-                weeks = rem_days // 7
-                days = rem_days % 7
-                
-                parts = []
-                if months > 0: parts.append(f"{months} month{'s' if months > 1 else ''}")
-                if weeks > 0: parts.append(f"{weeks} week{'s' if weeks > 1 else ''}")
-                if days > 0: parts.append(f"{days} day{'s' if days > 1 else ''}")
-                
-                time_str = ", ".join(parts) if parts else f"{days_left} day{'s' if days_left > 1 else ''}"
-                msg = f"🔔 REMINDER: {time_str} left to '{data['label']}'!"
-            else:
-                msg = f"🎉 TODAY IS THE DAY: '{data['label']}'!"
-                
-            action_kb = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("💤 Snooze 1 Day", callback_data=f"remsnooze_{data['_id']}"),
-                    InlineKeyboardButton("✅ Mark Done", callback_data=f"remdone_{data['_id']}")
-                ]
-            ])
-            await context.bot.send_message(chat_id=job.chat_id, text=msg, reply_markup=action_kb)
-            await notify_admin(context, f"✅ Reminder Delivered to `{job.chat_id}` for `{data['label']}`.")
-            
-            if days_left == 0 and reminders_col is not None:
-                rec = data.get("recurrence", "once")
-                if rec == "once":
-                    await reminders_col.delete_one({"_id": data['_id']})
-                    job.schedule_removal()
-                else:
-                    # Roll over recurring event
-                    rollover_days = {"daily": 1, "weekly": 7, "monthly": 30, "annually": 365}.get(rec, 7)
-                    new_target = (target + timedelta(days=rollover_days)).strftime("%Y-%m-%d")
-                    await reminders_col.update_one({"_id": data['_id']}, {"$set": {"target_date": new_target}})
-        else:
-            if reminders_col is not None:
-                await reminders_col.delete_one({"_id": data['_id']})
+    try:
+        user_reminders = await reminders_col.find({"user_id": user_id}).to_list(length=100)
+        if not user_reminders:
             job.schedule_removal()
+            return
+
+        tz_name = data.get('timezone', 'UTC')
+        try:
+            tz = pytz.timezone(tz_name)
+        except Exception:
+            tz = pytz.UTC
+
+        today_local = datetime.now(tz).date()
+        today_str = today_local.strftime("%Y-%m-%d")
+
+        due_by_category = {}
+
+        for r in user_reminders:
+            r_id = r['_id']
+            try:
+                t_date = datetime.strptime(r['target_date'], "%Y-%m-%d").date()
+            except Exception:
+                continue
+
+            days_left = (t_date - today_local).days
+
+            # 1. Clean up or roll over past-due reminders
+            if days_left < 0:
+                rec = r.get("recurrence", "once")
+                if rec == "once":
+                    await reminders_col.delete_one({"_id": r_id})
+                    if context.job_queue:
+                        for j in context.job_queue.get_jobs_by_name(str(r_id)):
+                            j.schedule_removal()
+                else:
+                    cat_check = r.get("category", "")
+                    rollover_days = {"daily": 1, "weekly": 7, "monthly": 30, "annually": 365}.get(
+                        rec, 365 if cat_check == "Birthday" else 7
+                    )
+                    new_target = (t_date + timedelta(days=rollover_days)).strftime("%Y-%m-%d")
+                    await reminders_col.update_one({"_id": r_id}, {"$set": {"target_date": new_target, "last_notified": ""}})
+                continue
+
+            # 2. Windowing: skip dormant reminders (> 90 days away)
+            if days_left > 90:
+                continue
+
+            # 3. Deduplicate: skip if this reminder was already notified today
+            if r.get("last_notified") == today_str:
+                continue
+
+            # 4. Resolve category
+            cat = r.get("category")
+            if not cat:
+                lbl = str(r.get("label", ""))
+                if "birthday" in lbl.lower() or "🎂" in lbl:
+                    cat = "Birthday"
+                else:
+                    cat = "General"
+
+            due_by_category.setdefault(cat, []).append((r, days_left))
+
+        # --- A. Deliver Merged Birthday Reminders ---
+        if "Birthday" in due_by_category:
+            birthday_items = due_by_category["Birthday"]
+            birthday_items.sort(key=lambda x: x[1])
+
+            lines = ["🎂 <b>BIRTHDAY REMINDERS</b>", "───────────────────────────"]
+            kb_rows = []
+
+            for b_rec, d_left in birthday_items:
+                b_id = b_rec['_id']
+                label = html.escape(str(b_rec.get('label', 'Birthday')))
+                if d_left == 0:
+                    lines.append(f"🎉 <b>TODAY: {label}!</b>")
+                elif d_left == 1:
+                    lines.append(f"🔔 <b>Tomorrow</b>: {label} (<code>{b_rec['target_date']}</code>)")
+                else:
+                    months = d_left // 30
+                    rem_days = d_left % 30
+                    weeks = rem_days // 7
+                    days = rem_days % 7
+                    parts = []
+                    if months > 0: parts.append(f"{months} month{'s' if months > 1 else ''}")
+                    if weeks > 0: parts.append(f"{weeks} week{'s' if weeks > 1 else ''}")
+                    if days > 0: parts.append(f"{days} day{'s' if days > 1 else ''}")
+                    time_str = ", ".join(parts) if parts else f"{d_left} days"
+                    lines.append(f"🔔 <b>In {time_str}</b>: {label} (<code>{b_rec['target_date']}</code>)")
+
+                short_label = label[:16] + "..." if len(label) > 16 else label
+                kb_rows.append([
+                    InlineKeyboardButton(f"💤 Snooze ({short_label})", callback_data=f"remsnooze_{b_id}"),
+                    InlineKeyboardButton(f"✅ Done ({short_label})", callback_data=f"remdone_{b_id}")
+                ])
+
+                # Mark as notified today
+                await reminders_col.update_one({"_id": b_id}, {"$set": {"last_notified": today_str}})
+
+                # If event is today and once, schedule cleanup
+                if d_left == 0:
+                    rec = b_rec.get("recurrence", "annually")
+                    if rec == "once":
+                        await reminders_col.delete_one({"_id": b_id})
+                    else:
+                        rollover_days = {"daily": 1, "weekly": 7, "monthly": 30, "annually": 365}.get(rec, 365)
+                        new_target = (datetime.strptime(b_rec['target_date'], "%Y-%m-%d").date() + timedelta(days=rollover_days)).strftime("%Y-%m-%d")
+                        await reminders_col.update_one({"_id": b_id}, {"$set": {"target_date": new_target}})
+
+            msg_text = "\n".join(lines)
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=msg_text,
+                reply_markup=InlineKeyboardMarkup(kb_rows) if kb_rows else None,
+                parse_mode="HTML"
+            )
+            await notify_admin(context, f"🎂 Consolidated Birthday Reminders sent to `{user_id}` ({len(birthday_items)} birthdays).")
+
+        # --- B. Deliver Other Reminders Segregated by Category ---
+        category_icons = {
+            "Travel": "✈️", "Launch": "🚀", "Payment": "💳",
+            "Medication": "💊", "Deadline": "🏆", "General": "⏰"
+        }
+
+        for cat, items in due_by_category.items():
+            if cat == "Birthday":
+                continue
+
+            items.sort(key=lambda x: x[1])
+            icon = category_icons.get(cat, "🔔")
+            lines = [f"{icon} <b>{html.escape(cat.upper())} REMINDERS</b>", "───────────────────────────"]
+            kb_rows = []
+
+            for r_rec, d_left in items:
+                r_id = r_rec['_id']
+                label = html.escape(str(r_rec.get('label', cat)))
+                if d_left == 0:
+                    lines.append(f"🎉 <b>TODAY: {label}!</b>")
+                elif d_left == 1:
+                    lines.append(f"🔔 <b>Tomorrow</b>: {label} (<code>{r_rec['target_date']}</code>)")
+                else:
+                    months = d_left // 30
+                    rem_days = d_left % 30
+                    weeks = rem_days // 7
+                    days = rem_days % 7
+                    parts = []
+                    if months > 0: parts.append(f"{months} month{'s' if months > 1 else ''}")
+                    if weeks > 0: parts.append(f"{weeks} week{'s' if weeks > 1 else ''}")
+                    if days > 0: parts.append(f"{days} day{'s' if days > 1 else ''}")
+                    time_str = ", ".join(parts) if parts else f"{d_left} days"
+                    lines.append(f"🔔 <b>In {time_str}</b>: {label} (<code>{r_rec['target_date']}</code>)")
+
+                short_label = label[:16] + "..." if len(label) > 16 else label
+                kb_rows.append([
+                    InlineKeyboardButton(f"💤 Snooze ({short_label})", callback_data=f"remsnooze_{r_id}"),
+                    InlineKeyboardButton(f"✅ Done ({short_label})", callback_data=f"remdone_{r_id}")
+                ])
+
+                # Mark as notified today
+                await reminders_col.update_one({"_id": r_id}, {"$set": {"last_notified": today_str}})
+
+                if d_left == 0:
+                    rec = r_rec.get("recurrence", "once")
+                    if rec == "once":
+                        await reminders_col.delete_one({"_id": r_id})
+                    else:
+                        rollover_days = {"daily": 1, "weekly": 7, "monthly": 30, "annually": 365}.get(rec, 7)
+                        new_target = (datetime.strptime(r_rec['target_date'], "%Y-%m-%d").date() + timedelta(days=rollover_days)).strftime("%Y-%m-%d")
+                        await reminders_col.update_one({"_id": r_id}, {"$set": {"target_date": new_target}})
+
+            msg_text = "\n".join(lines)
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=msg_text,
+                reply_markup=InlineKeyboardMarkup(kb_rows) if kb_rows else None,
+                parse_mode="HTML"
+            )
+            await notify_admin(context, f"🔔 Reminders [{cat}] sent to `{user_id}` ({len(items)} items).")
+
     except Exception as e:
-        logger.error(f"Reminder error: {e}")
-        await notify_admin(context, f"🔴 REMINDER FAILURE for User `{data.get('user_id')}`: {e}")
+        logger.error(f"Reminder delivery error: {e}")
+        await notify_admin(context, f"🔴 REMINDER FAILURE for User `{user_id}`: {e}")
+
 
 
 # --- HANDLERS ---
@@ -195,8 +320,9 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 desc_extra = ""
                 
             rec_tag = f" | 🔄 {r.get('recurrence', 'once').capitalize()}" if r.get('recurrence', 'once') != 'once' else ""
+            cat_display = r.get('category', 'General')
             await update.effective_message.reply_text(
-                f"{status_header}\n📅 {target_date_str} | ⏰ {r['reminder_time']}{rec_tag}{desc_extra}",
+                f"{status_header}\n🏷️ <b>Category:</b> {html.escape(cat_display)}\n📅 {target_date_str} | ⏰ {r['reminder_time']}{rec_tag}{desc_extra}",
                 reply_markup=kb,
                 parse_mode="HTML"
             )
@@ -238,15 +364,21 @@ async def handle_reminder_callback(update: Update, context: ContextTypes.DEFAULT
                 if rec:
                     curr_date = datetime.strptime(rec['target_date'], "%Y-%m-%d")
                     new_date = (curr_date + timedelta(days=1)).strftime("%Y-%m-%d")
-                    await reminders_col.update_one({"_id": oid}, {"$set": {"target_date": new_date}})
+                    await reminders_col.update_one({"_id": oid}, {"$set": {"target_date": new_date, "last_notified": ""}})
                     
                     # Reschedule job with updated date
                     rec["target_date"] = new_date
                     if context.application:
                         schedule_reminder_job(context.application, rec)
-                        
-                    await query.edit_message_text(f"💤 **Snoozed 1 Day**\nNew alert date: `{new_date}` for '{rec.get('label')}'", parse_mode="Markdown")
-                    return await query.answer("💤 Snoozed by 1 day!")
+
+                    kb = query.message.reply_markup.inline_keyboard if query.message and query.message.reply_markup else []
+                    if len(kb) > 1:
+                        new_kb = [row for row in kb if not any(r_id in btn.callback_data for btn in row)]
+                        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(new_kb) if new_kb else None)
+                        return await query.answer(f"💤 Snoozed '{rec.get('label')}' by 1 day ({new_date})!", show_alert=True)
+                    else:
+                        await query.edit_message_text(f"💤 **Snoozed 1 Day**\nNew alert date: `{new_date}` for '{rec.get('label')}'", parse_mode="Markdown")
+                        return await query.answer("💤 Snoozed by 1 day!")
                 else:
                     return await query.answer("Reminder not found.", show_alert=True)
             except Exception as e:
@@ -262,22 +394,38 @@ async def handle_reminder_callback(update: Update, context: ContextTypes.DEFAULT
                 if rec:
                     recurrence = rec.get("recurrence", "once")
                     if recurrence != "once":
-                        rollover_days = {"daily": 1, "weekly": 7, "monthly": 30, "annually": 365}.get(recurrence, 7)
+                        rollover_days = {"daily": 1, "weekly": 7, "monthly": 30, "annually": 365}.get(
+                            recurrence, 365 if rec.get("category") == "Birthday" else 7
+                        )
                         curr_date = datetime.strptime(rec['target_date'], "%Y-%m-%d")
                         new_date = (curr_date + timedelta(days=rollover_days)).strftime("%Y-%m-%d")
-                        await reminders_col.update_one({"_id": oid}, {"$set": {"target_date": new_date}})
+                        await reminders_col.update_one({"_id": oid}, {"$set": {"target_date": new_date, "last_notified": ""}})
                         rec["target_date"] = new_date
                         if context.application:
                             schedule_reminder_job(context.application, rec)
-                        await query.edit_message_text(f"🎉 **Completed!**\nRolled over to `{new_date}` ({recurrence.capitalize()}).", parse_mode="Markdown")
-                        return await query.answer("✅ Rolled over to next interval!")
+
+                        kb = query.message.reply_markup.inline_keyboard if query.message and query.message.reply_markup else []
+                        if len(kb) > 1:
+                            new_kb = [row for row in kb if not any(r_id in btn.callback_data for btn in row)]
+                            await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(new_kb) if new_kb else None)
+                            return await query.answer(f"🎉 Completed! Rolled over to {new_date} ({recurrence.capitalize()}).", show_alert=True)
+                        else:
+                            await query.edit_message_text(f"🎉 **Completed!**\nRolled over to `{new_date}` ({recurrence.capitalize()}).", parse_mode="Markdown")
+                            return await query.answer("✅ Rolled over to next interval!")
                     else:
                         await reminders_col.delete_one({"_id": oid})
                         if context.job_queue:
                             for job in context.job_queue.get_jobs_by_name(str(r_id)):
                                 job.schedule_removal()
-                        await query.edit_message_text(f"✅ **Marked Completed!**\nReminder for '{rec.get('label')}' has been cleared.", parse_mode="Markdown")
-                        return await query.answer("✅ Reminder cleared!")
+
+                        kb = query.message.reply_markup.inline_keyboard if query.message and query.message.reply_markup else []
+                        if len(kb) > 1:
+                            new_kb = [row for row in kb if not any(r_id in btn.callback_data for btn in row)]
+                            await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(new_kb) if new_kb else None)
+                            return await query.answer(f"✅ Cleared reminder for '{rec.get('label')}'!", show_alert=True)
+                        else:
+                            await query.edit_message_text(f"✅ **Marked Completed!**\nReminder for '{rec.get('label')}' has been cleared.", parse_mode="Markdown")
+                            return await query.answer("✅ Reminder cleared!")
                 else:
                     return await query.answer("Reminder not found.", show_alert=True)
             except Exception as e:
@@ -345,13 +493,45 @@ async def date_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
 async def label_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    label = query.data.replace("label_sel_", "")
-    context.user_data['label'] = label
+    raw_label = query.data.replace("label_sel_", "")
+
+    if "birthday" in raw_label.lower() or "🎂" in raw_label:
+        context.user_data['category'] = "Birthday"
+        context.user_data['recurrence'] = "annually"
+        await query.edit_message_text(
+            "🎂 **Whose birthday is this?**\n\nPlease enter the person's name or title (e.g., `Mom's Birthday`, `Alice`, `Best Friend`):",
+            parse_mode="Markdown"
+        )
+        return GET_BIRTHDAY_NAME
+
+    cat_map = {
+        "✈️ Travel": "Travel",
+        "🚀 Launch": "Launch",
+        "💳 Payment": "Payment",
+        "💊 Medication": "Medication",
+        "🏆 Deadline": "Deadline"
+    }
+    context.user_data['category'] = cat_map.get(raw_label, "General")
+    context.user_data['label'] = raw_label
     return await finish_reminder(query.message, context)
 
 
+async def handle_birthday_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    name = update.message.text.strip()
+    context.user_data['label'] = name
+    context.user_data['category'] = "Birthday"
+    context.user_data['recurrence'] = context.user_data.get('recurrence', 'annually')
+    return await finish_reminder(update.message, context)
+
+
 async def handle_label_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['label'] = update.message.text.strip()
+    text = update.message.text.strip()
+    context.user_data['label'] = text
+    if "birthday" in text.lower() or "🎂" in text:
+        context.user_data['category'] = "Birthday"
+        context.user_data['recurrence'] = "annually"
+    else:
+        context.user_data['category'] = "General"
     return await finish_reminder(update.message, context)
 
 
@@ -366,13 +546,24 @@ async def finish_reminder(message, context):
             context.user_data.clear()
             return ConversationHandler.END
 
+        category = context.user_data.get('category')
+        if not category:
+            lbl = context.user_data.get('label', '')
+            category = "Birthday" if ("birthday" in lbl.lower() or "🎂" in lbl) else "General"
+
+        recurrence = context.user_data.get('recurrence')
+        if not recurrence:
+            recurrence = "annually" if category == "Birthday" else "once"
+
         data = {
             "user_id": user_id, 
             "timezone": context.user_data['timezone'], 
             "target_date": context.user_data['target_date'], 
             "reminder_time": context.user_data['reminder_time'], 
             "label": context.user_data['label'],
-            "recurrence": context.user_data.get('recurrence', 'once')
+            "category": category,
+            "recurrence": recurrence,
+            "last_notified": ""
         }
         res = await reminders_col.insert_one(data)
         data['_id'] = res.inserted_id
@@ -389,7 +580,8 @@ async def finish_reminder(message, context):
         else:
             status_note = f"🔔 *Active countdown engaged! ({days_away} days remaining)*"
             
-        success_text = f"🚀 **Reminder Armed!**\n\n🏷️ `{data['label']}` on `{data['target_date']}`\n\n{status_note}"
+        rec_info = f" (🔄 {recurrence.capitalize()})" if recurrence != "once" else ""
+        success_text = f"🚀 **Reminder Armed!**\n\n🏷️ `{data['label']}` [{category}]\n📅 `{data['target_date']}`{rec_info}\n\n{status_note}"
         
         if message.from_user and message.from_user.is_bot:
             try: await message.edit_text(success_text, parse_mode="Markdown")
@@ -397,8 +589,8 @@ async def finish_reminder(message, context):
         else:
             await message.reply_text(success_text, parse_mode="Markdown")
         
-        await log_event(user_id, "User", f"Set Reminder: {data['label']}")
-        await notify_admin(context, f"📅 User `{user_id}` armed a reminder for `{data['label']}`.")
+        await log_event(user_id, "User", f"Set Reminder: {data['label']} [{category}]")
+        await notify_admin(context, f"📅 User `{user_id}` armed a [{category}] reminder for `{data['label']}`.")
         context.user_data.clear()
         return ConversationHandler.END
 
@@ -415,7 +607,8 @@ def get_reminder_conversation_handler():
         states={
             GET_TZ_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_tz_choice), MessageHandler(filters.LOCATION, handle_tz_choice)], 
             GET_DATE: [CallbackQueryHandler(date_callback_handler, pattern="^(cal_nav_|date_sel_|cal_view_|cal_set_|ignore)")], 
-            GET_LABEL: [CallbackQueryHandler(label_callback_handler, pattern="^label_sel_"), MessageHandler(filters.TEXT & ~filters.COMMAND, handle_label_text)]
+            GET_LABEL: [CallbackQueryHandler(label_callback_handler, pattern="^label_sel_"), MessageHandler(filters.TEXT & ~filters.COMMAND, handle_label_text)],
+            GET_BIRTHDAY_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_birthday_name)]
         }, 
         fallbacks=[CommandHandler("cancel", lambda u,c: (c.user_data.clear() or ConversationHandler.END))], 
         per_message=False

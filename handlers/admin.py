@@ -37,67 +37,171 @@ def parse_duration(d_str: str) -> float | None:
 
 
 async def admin_palette_msg():
+    # Counts for quick summary metrics
+    r_c = await reminders_col.count_documents({}) if reminders_col is not None else 0
+    c_c = await codes_col.count_documents({}) if codes_col is not None else 0
+    k_c = await group_keys_col.count_documents({}) if group_keys_col is not None else 0
+    u_c = await users_col.count_documents({}) if users_col is not None else 0
+
     keyboard = [
-        [InlineKeyboardButton("📊 System Stats", callback_data="pal_stats"), InlineKeyboardButton("📦 Export Data", callback_data="pal_export")],
-        [InlineKeyboardButton("📜 All Reminders", callback_data="pal_alllists"), InlineKeyboardButton("🗝️ Key Matrix", callback_data="pal_keys")],
-        [InlineKeyboardButton("👥 Access Matrix", callback_data="pal_access"), InlineKeyboardButton("📋 System Logs", callback_data="pal_logs")],
-        [InlineKeyboardButton("🗑️ Manage DB", callback_data="pal_manage"), InlineKeyboardButton("🔄 Sync Metadata", callback_data="pal_sync")]
+        [
+            InlineKeyboardButton("🗄️ Media & Catalog", callback_data="pal_cat_media"),
+            InlineKeyboardButton("🔐 Access & Security", callback_data="pal_cat_security")
+        ],
+        [
+            InlineKeyboardButton("⏰ Reminders & Schedules", callback_data="pal_cat_reminders"),
+            InlineKeyboardButton("📈 Audits & System", callback_data="pal_cat_system")
+        ],
+        [
+            InlineKeyboardButton("📊 System Stats", callback_data="pal_stats"),
+            InlineKeyboardButton("📋 Activity Logs", callback_data="pal_logs")
+        ]
     ]
+
     text = (
-        "👑 **MASTER CONSOLE** (Ultimate Master)\n"
-        "───────────────────────\n"
-        "**System Status:** 🌐 Operational\n"
-        "───────────────────────\n"
-        "📜 **COMPLETE COMMAND LIST:**\n\n"
-        "**Core Commands:**\n"
-        "• `/start` / `/admin` - Dashboard\n"
-        "• `/remind` - Setup countdown (GUI)\n"
-        "• `/list` - View reminders\n"
-        "• `/ascii` - Text to ASCII art\n\n"
-        "**Access Management:**\n"
-        "• `/grant USER_ID PREFIX [DURATION]` - Grant media access (e.g. 24h, 7d)\n"
-        "• `/revoke USER_ID PREFIX` - Remove media access\n"
-        "• `/freeze USER_ID PREFIX` - Suspend media access\n"
-        "• `/unfreeze USER_ID PREFIX` - Restore media access\n\n"
-        "**Database Matrix:**\n"
-        "• `/save CODE` - Index by reply\n"
-        "• `/autobulk START END PREFIX` - Mass index\n"
-        "• `/del CODE` - Single file delete\n"
-        "• `/del PREFIX START END` - Surgical range delete\n"
-        "• `/setkey PREFIX PASSWORD` - Secure prefix partition\n"
-        "• `/setlabel PREFIX CAT TITLE` - Assign title, category & TMDB sync\n"
-        "• `/setseason PREFIX SN START END` - Map season range\n"
-        "• `/delseason PREFIX SN` - Delete specific season\n"
-        "• `/clearseasons PREFIX` - Wipe all seasons\n"
-        "• `/rename_prefix OLD NEW` - Bulk migrate prefix\n"
-        "• `/refresh` - Sync files and TMDB metadata\n\n"
-        "**File Retrieval Engine:**\n"
-        "• `/get CODE` - Fetch specific asset\n"
-        "• `/get PREFIX START END` - Sequential range delivery\n\n"
-        "**Monitoring:**\n"
-        "• `/stats` - Live system audit report\n"
-        "• `/export` - Database JSON backup\n"
-        "───────────────────────"
+        "👑 **MASTER ADMIN CONSOLE**\n"
+        "─────────────────────────────────\n"
+        "⚡ **System Status:** 🌐 Operational\n"
+        f"📦 **Assets:** `{c_c:03d}` | ⏰ **Reminders:** `{r_c:03d}`\n"
+        f"🔐 **Locked Prefixes:** `{k_c:02d}` | 👤 **Users:** `{u_c:03d}`\n"
+        "─────────────────────────────────\n"
+        "Select a management category below:"
     )
     return text, InlineKeyboardMarkup(keyboard)
+
+
+async def show_admin_media_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "🗄️ **MEDIA & CATALOG MANAGEMENT**\n"
+        "─────────────────────────────────\n"
+        "**Available Commands:**\n"
+        "• `/save <CODE>` — Index single media by reply\n"
+        "• `/autobulk <START> <END> <PREFIX>` — Mass forward index\n"
+        "• `/del <CODE>` — Single file delete\n"
+        "• `/del <PREFIX> <START> <END>` — Surgical range delete\n"
+        "• `/setlabel <PREFIX> <MOVIE|SERIES> <TITLE>` — Assign title & TMDB sync\n"
+        "• `/setseason <PREFIX> <SN> <START> <END>` — Map season episode range\n"
+        "• `/delseason <PREFIX> <SN>` — Delete specific season\n"
+        "• `/clearseasons <PREFIX>` — Clear all mapped seasons\n"
+        "• `/rename_prefix <OLD> <NEW>` — Bulk migrate prefix\n"
+        "• `/refresh` — Sync files & fetch missing TMDB metadata\n"
+        "─────────────────────────────────"
+    )
+    keyboard = [
+        [InlineKeyboardButton("🔄 Sync TMDB & Files", callback_data="pal_sync"), InlineKeyboardButton("🗑️ Manage / Nuke DB", callback_data="pal_manage")],
+        [InlineKeyboardButton("🔙 Back to Main Console", callback_data="pal_home")]
+    ]
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    else:
+        await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+
+async def show_admin_security_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "🔐 **ACCESS & SECURITY MANAGEMENT**\n"
+        "─────────────────────────────────\n"
+        "**Available Commands:**\n"
+        "• `/setkey <PREFIX> <PASSWORD>` — Lock prefix behind a passkey partition\n"
+        "• `/unsetkey <PREFIX>` — Remove passkey partition completely\n"
+        "• `/grant <USER_ID> <PREFIX> [DURATION]` — Grant media access (e.g. `24h`, `7d`)\n"
+        "• `/revoke <USER_ID> <PREFIX>` — Completely remove media access\n"
+        "• `/freeze <USER_ID> <PREFIX>` — Temporarily suspend access\n"
+        "• `/unfreeze <USER_ID> <PREFIX>` — Restore suspended access\n"
+        "─────────────────────────────────"
+    )
+    keyboard = [
+        [InlineKeyboardButton("👥 Access Matrix", callback_data="pal_access"), InlineKeyboardButton("🗝️ Key Matrix", callback_data="pal_keys")],
+        [InlineKeyboardButton("🔙 Back to Main Console", callback_data="pal_home")]
+    ]
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    else:
+        await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+
+async def show_admin_reminders_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "⏰ **REMINDERS & SCHEDULES**\n"
+        "─────────────────────────────────\n"
+        "**Features & Commands:**\n"
+        "• `/remind` — Interactive calendar setup wizard with category tags\n"
+        "• `/list` — View and manage active reminders\n"
+        "• 🎂 **Birthday Engine:** Consolidates all birthdays into a single daily digest\n"
+        "• 🔔 **Other Categories:** Dispatches segregated notifications by category\n"
+        "• 📦 Automated weekly JSON database backups sent directly to admin\n"
+        "─────────────────────────────────"
+    )
+    keyboard = [
+        [InlineKeyboardButton("📜 Global Reminders Audit", callback_data="pal_alllists")],
+        [InlineKeyboardButton("🔙 Back to Main Console", callback_data="pal_home")]
+    ]
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    else:
+        await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+
+async def show_admin_system_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "📈 **AUDITS & SYSTEM CONTROLS**\n"
+        "─────────────────────────────────\n"
+        "**Available Commands:**\n"
+        "• `/stats` — Live system audit report\n"
+        "• `/export` — Database JSON snapshot backup\n"
+        "• Automated 7-day TTL auto-pruning active for activity logs\n"
+        "─────────────────────────────────"
+    )
+    keyboard = [
+        [InlineKeyboardButton("📊 System Stats", callback_data="pal_stats"), InlineKeyboardButton("📦 Export JSON Backup", callback_data="pal_export")],
+        [InlineKeyboardButton("📋 Activity Logs", callback_data="pal_logs")],
+        [InlineKeyboardButton("🔙 Back to Main Console", callback_data="pal_home")]
+    ]
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    else:
+        await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 
 async def handle_palette_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if update.effective_user.id != ADMIN_ID:
         return await query.answer("Access Denied.", show_alert=True)
-        
-    action = query.data.split('_')[1]
-    if action == "stats": await get_stats(update, context)
-    elif action == "access": await get_access_matrix(update, context) 
-    elif action == "export": await export_data(update, context)
-    elif action == "alllists": await get_all_lists(update, context)
-    elif action == "keys": await get_key_matrix(update, context)
-    elif action == "logs": await get_system_logs(update, context)
-    elif action == "sync": await refresh_metadata(update, context)
+
+    parts = query.data.split('_')
+    action = parts[1]
+
+    if action == "home":
+        text, markup = await admin_palette_msg()
+        await query.edit_message_text(text, reply_markup=markup, parse_mode="Markdown")
+    elif action == "cat":
+        sub = parts[2]
+        if sub == "media":
+            await show_admin_media_menu(update, context)
+        elif sub == "security":
+            await show_admin_security_menu(update, context)
+        elif sub == "reminders":
+            await show_admin_reminders_menu(update, context)
+        elif sub == "system":
+            await show_admin_system_menu(update, context)
+    elif action == "stats":
+        await get_stats(update, context)
+    elif action == "access":
+        await get_access_matrix(update, context) 
+    elif action == "export":
+        await export_data(update, context)
+    elif action == "alllists":
+        await get_all_lists(update, context)
+    elif action == "keys":
+        await get_key_matrix(update, context)
+    elif action == "logs":
+        await get_system_logs(update, context)
+    elif action == "sync":
+        await refresh_metadata(update, context)
     elif action == "manage": 
         context.user_data.clear()
         await manage_db_gui(update, context)
+
     await query.answer()
 
 
@@ -603,6 +707,22 @@ async def set_group_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await group_keys_col.update_one({"chat_id": update.effective_chat.id, "prefix": prefix}, {"$set": {"secret_key": password}}, upsert=True)
     await update.message.reply_text(f"🔒 Key set for prefix `{prefix}`!")
     await notify_admin(context, f"🔒 Access key set for `{prefix}`.")
+
+
+async def unset_group_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin command to remove password partition from a movie or series prefix."""
+    if update.effective_user.id != ADMIN_ID or group_keys_col is None: return
+    if not context.args:
+        return await update.message.reply_text("❌ Usage: `/unsetkey PREFIX`\nExample: `/unsetkey MOV`", parse_mode="Markdown")
+
+    prefix = context.args[0].upper().strip()[:3]
+    res = await group_keys_col.delete_many({"prefix": prefix})
+    if res.deleted_count > 0:
+        await update.message.reply_text(f"🔓 **Partition Removed!** Prefix `{prefix}` is now completely unlocked for all users.", parse_mode="Markdown")
+        await log_event(ADMIN_ID, "ADMIN", f"Unset Key: {prefix}")
+        await notify_admin(context, f"🔓 Admin removed password partition from `{prefix}`.")
+    else:
+        await update.message.reply_text(f"ℹ️ Prefix `{prefix}` was not password-locked.")
 
 
 async def set_prefix_label(update: Update, context: ContextTypes.DEFAULT_TYPE):

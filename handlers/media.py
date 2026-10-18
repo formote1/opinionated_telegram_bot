@@ -28,14 +28,16 @@ from services.access import (
     reset_failed_attempts,
 )
 from services.ascii_art import ascii_command_handler
+from services.tmdb import fetch_tmdb_metadata
 
 
 async def browse_library(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📺 Series", callback_data="lib_cat_series"), 
-         InlineKeyboardButton("🎬 Movies", callback_data="lib_cat_movie")]
+         InlineKeyboardButton("🎬 Movies", callback_data="lib_cat_movie")],
+        [InlineKeyboardButton("🌐 All Titles (Unified Library)", callback_data="lib_cat_all")]
     ]
-    text = "📂 **CONTENT LIBRARY**\nSelect category:"
+    text = "📂 **CONTENT LIBRARY**\nSelect browsing mode:"
     if update.callback_query: 
         await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
     else: 
@@ -55,7 +57,8 @@ async def show_alphabet_selector(update: Update, context: ContextTypes.DEFAULT_T
             row = []
     if row: keyboard.append(row)
     keyboard.append([InlineKeyboardButton("🔙 Back to Categories", callback_data="lib_back")])
-    await query.edit_message_text(f"📂 **{cat.upper()} - Select Letter**\nChoose starting letter:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    cat_label = "ALL TITLES" if cat == "all" else cat.upper()
+    await query.edit_message_text(f"📂 **{cat_label} - Select Letter**\nChoose starting letter:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 
 async def show_filtered_library_items(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -64,18 +67,28 @@ async def show_filtered_library_items(update: Update, context: ContextTypes.DEFA
     cat, letter = parts[2], parts[3]
     escaped_letter = re.escape(letter)
     regex = f"^{escaped_letter}" if letter != "#" else "^[^A-Za-z]"
-    cursor = prefix_labels_col.find({"category": cat, "name": {"$regex": regex, "$options": "i"}}).sort("name", 1)
+
+    query_filter = {"name": {"$regex": regex, "$options": "i"}}
+    if cat in ["series", "movie"]:
+        query_filter["category"] = cat
+
+    cursor = prefix_labels_col.find(query_filter).sort("name", 1)
     prefixes = await cursor.to_list(length=100)
-    if not prefixes: return await query.answer(f"No {cat} starting with '{letter}'.", show_alert=True)
+    if not prefixes:
+        cat_name = "titles" if cat == "all" else cat
+        return await query.answer(f"No {cat_name} starting with '{letter}'.", show_alert=True)
     
     keyboard = []
     for p in prefixes:
+        p_cat = p.get("category", "movie")
+        cat_icon = "🎬" if p_cat == "movie" else "📺"
         tmdb = p.get("tmdb", {})
         rating_str = f" ⭐{tmdb['rating']}" if tmdb.get("rating") else ""
-        keyboard.append([InlineKeyboardButton(f"{p['name']}{rating_str}", callback_data=f"lib_pick_{cat}_{p['prefix']}")])
+        keyboard.append([InlineKeyboardButton(f"{cat_icon} {p['name']}{rating_str}", callback_data=f"lib_pick_{p_cat}_{p['prefix']}")])
         
     keyboard.append([InlineKeyboardButton("🔙 Back to Alphabet", callback_data=f"lib_cat_{cat}")])
-    await query.edit_message_text(f"📂 **{cat.upper()} ({letter})**\nSelect a title:ㅤㅤㅤㅤ", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    cat_label = "ALL TITLES" if cat == "all" else cat.upper()
+    await query.edit_message_text(f"📂 **{cat_label} ({letter})**\nSelect a title:ㅤㅤㅤㅤ", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 
 async def handle_library_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -86,16 +99,41 @@ async def handle_library_pick(update: Update, context: ContextTypes.DEFAULT_TYPE
     label_rec = await prefix_labels_col.find_one({"prefix": prefix})
     name = label_rec['name'] if label_rec else prefix
     first_letter = name[0].upper() if name and name[0].isalpha() else "#"
-    
-    # Title header with TMDB info if present
+
+    # Dynamic on-demand TMDB lookup if not yet cached
     tmdb = label_rec.get("tmdb") if label_rec else None
-    header_extra = ""
+    if not tmdb and label_rec:
+        tmdb = await fetch_tmdb_metadata(name, cat)
+        if tmdb:
+            await prefix_labels_col.update_one({"_id": label_rec["_id"]}, {"$set": {"tmdb": tmdb}})
+
+    # Format TMDB banner & rich overview
+    banner_img_url = ""
+    header_parts = []
+    cat_icon = "🎬" if cat == "movie" else "📺"
+
     if tmdb:
-        yr = f" ({tmdb['year']})" if tmdb.get("year") else ""
-        rt = f" ⭐ {tmdb['rating']}/10" if tmdb.get("rating") else ""
-        syn = f"\n_{tmdb['overview'][:180]}..._\n" if tmdb.get("overview") else "\n"
-        header_extra = f"{yr}{rt}{syn}"
-        
+        banner_img_url = tmdb.get("banner_url") or tmdb.get("poster_url") or ""
+        title_display = tmdb.get("title") or name
+        year_display = f" ({tmdb['year']})" if tmdb.get("year") else ""
+        header_parts.append(f"{cat_icon} **{title_display}**{year_display}")
+
+        if tmdb.get("rating"):
+            header_parts.append(f"⭐ **Rating:** `{tmdb['rating']}/10`")
+        if tmdb.get("genres"):
+            header_parts.append(f"🎭 **Genres:** {tmdb['genres']}")
+        if tmdb.get("overview"):
+            synopsis = tmdb["overview"]
+            if len(synopsis) > 280:
+                synopsis = synopsis[:275] + "..."
+            header_parts.append(f"\n📖 **Overview:**\n_{synopsis}_")
+    else:
+        header_parts.append(f"{cat_icon} **{name}**")
+
+    # Embed banner image link at top of markdown for Telegram rich preview
+    banner_prefix = f"[\u200b]({banner_img_url})\n" if banner_img_url else ""
+    card_text = banner_prefix + "\n".join(header_parts)
+
     if cat == "movie":
         cursor = codes_col.find({"code": {"$regex": f"^{escaped_prefix}"}}).sort("code", 1)
         items = await cursor.to_list(length=100)
@@ -104,14 +142,14 @@ async def handle_library_pick(update: Update, context: ContextTypes.DEFAULT_TYPE
             label = item.get("file_name") or item.get("caption", "").strip() or item["code"]
             if len(label) > 35: label = label[:32] + "..."
             keyboard.append([InlineKeyboardButton(f"🎬 {label}", callback_data=f"lib_dl_{item['code']}_one")])
-        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"lib_alpha_{cat}_{first_letter}")])
-        await query.edit_message_text(f"🍿 **{name}**{header_extra}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        keyboard.append([InlineKeyboardButton("🔙 Back to Library", callback_data=f"lib_alpha_{cat}_{first_letter}")])
+        await query.edit_message_text(card_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
     else:
         seasons = label_rec.get("seasons", []) if label_rec else []
         if seasons:
             keyboard = [[InlineKeyboardButton(f"❄️ Season {sn['num']}", callback_data=f"lib_sn_{prefix}_{sn['num']}")] for sn in seasons]
-            keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"lib_alpha_{cat}_{first_letter}")])
-            await query.edit_message_text(f"📺 **{name}**{header_extra}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            keyboard.append([InlineKeyboardButton("🔙 Back to Library", callback_data=f"lib_alpha_{cat}_{first_letter}")])
+            await query.edit_message_text(card_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         else:
             cursor = codes_col.find({"code": {"$regex": f"^{escaped_prefix}"}}).sort("code", 1)
             items = await cursor.to_list(length=100)
@@ -120,8 +158,8 @@ async def handle_library_pick(update: Update, context: ContextTypes.DEFAULT_TYPE
                 row.append(InlineKeyboardButton(f"Ep {i+1}", callback_data=f"lib_dl_{item['code']}_one"))
                 if len(row) == 4: keyboard.append(row); row = []
             if row: keyboard.append(row)
-            keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"lib_alpha_{cat}_{first_letter}")])
-            await query.edit_message_text(f"📺 **{name}**{header_extra}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            keyboard.append([InlineKeyboardButton("🔙 Back to Library", callback_data=f"lib_alpha_{cat}_{first_letter}")])
+            await query.edit_message_text(card_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 
 async def handle_season_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -132,6 +170,13 @@ async def handle_season_pick(update: Update, context: ContextTypes.DEFAULT_TYPE)
     name = label_rec['name'] if label_rec else prefix
     season_obj = next((s for s in label_rec['seasons'] if s['num'] == sn_num), None) if label_rec else None
     if not season_obj: return await query.answer("Error.")
+
+    tmdb = label_rec.get("tmdb") if label_rec else None
+    banner_img_url = (tmdb.get("banner_url") or tmdb.get("poster_url")) if tmdb else ""
+    banner_prefix = f"[\u200b]({banner_img_url})\n" if banner_img_url else ""
+    rating_str = f" ⭐ `{tmdb['rating']}/10`" if tmdb and tmdb.get("rating") else ""
+    season_header = f"{banner_prefix}📺 **{name}** — Season {sn_num}{rating_str}\n\nSelect episode to download:"
+
     start, end = season_obj['start'], season_obj['end']
     target_codes = [f"{prefix}{i:03d}" for i in range(start, end + 1)]
     cursor = codes_col.find({"code": {"$in": target_codes}}).sort("code", 1)
@@ -142,7 +187,8 @@ async def handle_season_pick(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if len(row) == 4: keyboard.append(row); row = []
     if row: keyboard.append(row)
     keyboard.append([InlineKeyboardButton("🔙 Back to Seasons", callback_data=f"lib_pick_series_{prefix}")])
-    await query.edit_message_text(f"📺 **{name}** S{sn_num}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    await query.edit_message_text(season_header, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
 
 
 async def execute_file_delivery(chat_id, record, context, user, send_alert=True):

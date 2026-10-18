@@ -44,6 +44,7 @@ from handlers.admin import (
     auto_bulk_register,
     refresh_metadata,
     set_group_key,
+    unset_group_key,
     set_prefix_label,
     set_season_mapping,
     delete_season_mapping,
@@ -89,6 +90,8 @@ def create_application():
     app.add_handler(CommandHandler("autobulk", auto_bulk_register))
     app.add_handler(CommandHandler("refresh", refresh_metadata))
     app.add_handler(CommandHandler("setkey", set_group_key))
+    app.add_handler(CommandHandler("unsetkey", unset_group_key))
+    app.add_handler(CommandHandler("delkey", unset_group_key))
     app.add_handler(CommandHandler("setlabel", set_prefix_label))
     app.add_handler(CommandHandler("setseason", set_season_mapping))
     app.add_handler(CommandHandler("delseason", delete_season_mapping))
