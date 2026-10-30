@@ -86,6 +86,8 @@ async def get_group_gate(chat_id: int, prefix: str) -> dict | None:
         return None
 
     gate = await group_keys_col.find_one({"chat_id": chat_id, "prefix": pfx})
+    if not gate:
+        gate = await group_keys_col.find_one({"prefix": pfx})
     _group_keys_cache[cache_key] = (now, gate)
     return gate
 
@@ -147,7 +149,7 @@ async def check_access_gate(user_id: int, record: dict) -> tuple[bool, str, int 
             )
             return False, prefix, chat_id, False, True
 
-        if auth_key in auth.get("unlocked_prefixes", []):
+        if auth_key in auth.get("unlocked_prefixes", []) or prefix in auth.get("unlocked_prefixes", []):
             return True, prefix, chat_id, False, False
 
     return False, prefix, chat_id, False, False

@@ -38,6 +38,10 @@ def format_time_left(days_left: int) -> str:
         return "today"
     elif days_left == 1:
         return "1 day"
+    elif days_left == -1:
+        return "yesterday"
+    elif days_left < 0:
+        return f"{abs(days_left)} days ago"
     months = days_left // 30
     rem_days = days_left % 30
     weeks = rem_days // 7

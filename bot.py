@@ -48,7 +48,7 @@ from handlers.admin import (
 )
 
 # Modular Handlers
-from handlers.common import start_command
+from handlers.common import start_command, web_command
 from handlers.media import (
     browse_library,
     core_routing_manager,
@@ -97,6 +97,7 @@ def create_application():
     # --- Common & Greeting Handlers ---
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("admin", start_command))
+    app.add_handler(CommandHandler(["web", "login", "webapp"], web_command))
 
     # --- Reminder Handlers ---
     app.add_handler(CommandHandler("list", list_reminders))
@@ -136,6 +137,8 @@ def create_application():
 async def main():
     """Bot lifecycle orchestrator: initializes database, webhook server, and task queues."""
     if not TOKEN or not MONGO_URI or not RENDER_URL:
+        main_loop = asyncio.get_running_loop()
+        init_server(None, main_loop)
         start_server_daemon(port=PORT)
         while True:
             await asyncio.sleep(3600)

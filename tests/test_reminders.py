@@ -5,6 +5,8 @@ from handlers.reminders import format_time_left
 def test_format_time_left():
     assert format_time_left(0) == "today"
     assert format_time_left(1) == "1 day"
+    assert format_time_left(-1) == "yesterday"
+    assert format_time_left(-5) == "5 days ago"
     assert "week" in format_time_left(7)
     assert "month" in format_time_left(30)
     assert "2 months" in format_time_left(65)
