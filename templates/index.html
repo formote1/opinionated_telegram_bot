@@ -105,7 +105,10 @@
     </nav>
 
     <!-- USER STATUS & AUTH BUTTON -->
-    <div class="flex items-center gap-3">
+    <div class="flex items-center gap-2.5">
+      <button onclick="openTelegram()" title="Open Telegram App" class="px-3 py-1.5 rounded-xl bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border border-sky-500/20 text-xs font-semibold flex items-center gap-1.5 transition active:scale-95">
+        <span>✈️</span> <span class="hidden sm:inline">Open</span> Telegram
+      </button>
       <div id="user-profile" class="flex items-center gap-2.5">
         <!-- Injected via JS -->
       </div>
@@ -369,11 +372,181 @@
       </div>
 
       <!-- ADMIN SUB-TABS -->
-      <div class="flex items-center gap-2 border-b border-white/10 pb-3">
+      <div class="flex flex-wrap items-center gap-2 border-b border-white/10 pb-3">
         <button onclick="setAdminSubTab('overview')" id="admin-sub-overview" class="admin-tab-btn active px-3.5 py-1.5 rounded-xl bg-sky-600 text-white text-xs font-medium transition">📊 Overview</button>
+        <button onclick="setAdminSubTab('files')" id="admin-sub-files" class="admin-tab-btn px-3.5 py-1.5 rounded-xl bg-slate-900 text-slate-400 hover:text-white border border-white/5 text-xs font-medium transition">📁 Partition & Files</button>
+        <button onclick="setAdminSubTab('media_admin')" id="admin-sub-media_admin" class="admin-tab-btn px-3.5 py-1.5 rounded-xl bg-slate-900 text-slate-400 hover:text-white border border-white/5 text-xs font-medium transition">🎬 Media & TMDB</button>
         <button onclick="setAdminSubTab('keys')" id="admin-sub-keys" class="admin-tab-btn px-3.5 py-1.5 rounded-xl bg-slate-900 text-slate-400 hover:text-white border border-white/5 text-xs font-medium transition">🗝️ Key Matrix</button>
         <button onclick="setAdminSubTab('access')" id="admin-sub-access" class="admin-tab-btn px-3.5 py-1.5 rounded-xl bg-slate-900 text-slate-400 hover:text-white border border-white/5 text-xs font-medium transition">👥 Access Matrix</button>
         <button onclick="setAdminSubTab('logs')" id="admin-sub-logs" class="admin-tab-btn px-3.5 py-1.5 rounded-xl bg-slate-900 text-slate-400 hover:text-white border border-white/5 text-xs font-medium transition">📋 Activity Logs</button>
+      </div>
+
+      <!-- SUBVIEW: FILES & PARTITIONS -->
+      <div id="admin-view-files" class="admin-view hidden space-y-6">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <!-- Passkey Management -->
+          <div class="glass-card rounded-2xl p-6 space-y-4 border border-white/10">
+            <h3 class="font-bold text-sm text-white flex items-center gap-2">
+              <span>🔐</span> Partition Passkey Controls
+            </h3>
+            <div class="space-y-3 text-xs">
+              <div class="p-3 rounded-xl bg-slate-900/80 border border-white/5 space-y-2">
+                <span class="font-semibold text-slate-300 block">Lock / Unlock Partition</span>
+                <div class="grid grid-cols-2 gap-2">
+                  <input type="text" id="af-lock-prefix" placeholder="Prefix (e.g. LOK or 0)" class="px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-white font-mono uppercase text-xs">
+                  <input type="password" id="af-lock-pass" placeholder="Secret Passkey" class="px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-white text-xs">
+                </div>
+                <div class="flex gap-2 pt-1">
+                  <button onclick="adminToolLock()" class="flex-1 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-medium transition">Lock Partition</button>
+                  <button onclick="adminToolUnlock()" class="flex-1 py-1.5 rounded-lg bg-rose-600/30 text-rose-300 hover:bg-rose-600/40 font-medium transition">Make Public</button>
+                </div>
+              </div>
+              <div class="p-3 rounded-xl bg-slate-900/80 border border-white/5 space-y-2">
+                <span class="font-semibold text-slate-300 block">Rotate / Change Passkey</span>
+                <div class="grid grid-cols-3 gap-2">
+                  <input type="text" id="af-rot-prefix" placeholder="Prefix (or 0)" class="px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-white font-mono uppercase text-xs">
+                  <input type="password" id="af-rot-old" placeholder="Old Passkey" class="px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-white text-xs">
+                  <input type="password" id="af-rot-new" placeholder="New Passkey" class="px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-white text-xs">
+                </div>
+                <button onclick="adminToolChangePasskey()" class="w-full py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-slate-950 font-semibold transition">Rotate Passkey</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Move / Rename Prefix -->
+          <div class="glass-card rounded-2xl p-6 space-y-4 border border-white/10">
+            <h3 class="font-bold text-sm text-white flex items-center gap-2">
+              <span>🔄</span> Bulk Prefix Migration / Rename
+            </h3>
+            <p class="text-xs text-slate-400">Migrates all assets, secret keys, and media labels from an old prefix to a new 3-character prefix.</p>
+            <div class="p-3.5 rounded-xl bg-slate-900/80 border border-white/5 space-y-3 text-xs">
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="block text-slate-400 mb-1">Old Prefix</label>
+                  <input type="text" id="af-mv-old" maxlength="3" placeholder="e.g. OLD" class="w-full px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-white font-mono uppercase text-xs">
+                </div>
+                <div>
+                  <label class="block text-slate-400 mb-1">New Prefix</label>
+                  <input type="text" id="af-mv-new" maxlength="3" placeholder="e.g. NEW" class="w-full px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-white font-mono uppercase text-xs">
+                </div>
+              </div>
+              <button onclick="adminToolMovePrefix()" class="w-full py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-semibold transition shadow">Migrate Prefix & Assets</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Asset Deletion -->
+        <div class="glass-card rounded-2xl p-6 space-y-4 border border-white/10">
+          <h3 class="font-bold text-sm text-white flex items-center gap-2">
+            <span>🗑️</span> Surgical Asset Deletion
+          </h3>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+            <div class="p-3.5 rounded-xl bg-slate-900/80 border border-white/5 space-y-2.5">
+              <span class="font-semibold text-slate-300 block">Single Asset Deletion</span>
+              <input type="text" id="af-del-single" placeholder="Asset Code (e.g. LOK001)" class="w-full px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-white font-mono uppercase text-xs">
+              <button onclick="adminToolDelSingle()" class="w-full py-1.5 rounded-lg bg-rose-600/30 text-rose-300 hover:bg-rose-600/50 font-medium transition">Delete Asset</button>
+            </div>
+            <div class="p-3.5 rounded-xl bg-slate-900/80 border border-white/5 space-y-2.5">
+              <span class="font-semibold text-slate-300 block">Range Deletion (Max 100)</span>
+              <div class="grid grid-cols-3 gap-2">
+                <input type="text" id="af-del-range-pfx" maxlength="3" placeholder="Prefix (LOK)" class="px-2 py-2 rounded-xl bg-slate-950 border border-white/10 text-white font-mono uppercase text-xs">
+                <input type="number" id="af-del-range-start" placeholder="Start (1)" class="px-2 py-2 rounded-xl bg-slate-950 border border-white/10 text-white text-xs">
+                <input type="number" id="af-del-range-end" placeholder="End (20)" class="px-2 py-2 rounded-xl bg-slate-950 border border-white/10 text-white text-xs">
+              </div>
+              <button onclick="adminToolDelRange()" class="w-full py-1.5 rounded-lg bg-rose-600/30 text-rose-300 hover:bg-rose-600/50 font-medium transition">Delete Range</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SUBVIEW: MEDIA & TMDB -->
+      <div id="admin-view-media_admin" class="admin-view hidden space-y-6">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <!-- Catalog Label & Category -->
+          <div class="glass-card rounded-2xl p-6 space-y-4 border border-white/10 text-xs">
+            <h3 class="font-bold text-sm text-white flex items-center gap-2">
+              <span>🏷️</span> Catalog Title & Category
+            </h3>
+            <div class="p-3.5 rounded-xl bg-slate-900/80 border border-white/5 space-y-2.5">
+              <div class="grid grid-cols-3 gap-2">
+                <input type="text" id="am-label-pfx" maxlength="3" placeholder="Prefix (LOK)" class="px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-white font-mono uppercase text-xs">
+                <select id="am-label-cat" class="px-2 py-2 rounded-xl bg-slate-950 border border-white/10 text-white text-xs">
+                  <option value="movie">Movie 🎬</option>
+                  <option value="series">Series 📺</option>
+                </select>
+                <input type="text" id="am-label-title" placeholder="Catalog Title" class="px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-white text-xs">
+              </div>
+              <div class="flex gap-2">
+                <button onclick="adminToolSetLabel()" class="flex-1 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-medium transition">Set Label</button>
+                <button onclick="adminToolDelLabel()" class="px-4 py-1.5 rounded-lg bg-rose-600/30 text-rose-300 hover:bg-rose-600/40 font-medium transition">Unlink</button>
+              </div>
+            </div>
+
+            <!-- TMDB Linker -->
+            <h3 class="font-bold text-sm text-white flex items-center gap-2 pt-2">
+              <span>🎬</span> TMDB Metadata & Posters
+            </h3>
+            <div class="p-3.5 rounded-xl bg-slate-900/80 border border-white/5 space-y-2.5">
+              <div class="grid grid-cols-3 gap-2">
+                <input type="text" id="am-tmdb-pfx" maxlength="3" placeholder="Prefix" class="px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-white font-mono uppercase text-xs">
+                <input type="text" id="am-tmdb-query" placeholder="Title Query or TMDB ID" class="col-span-2 px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-white text-xs">
+              </div>
+              <div class="flex gap-2">
+                <button onclick="adminToolSetTmdb()" class="flex-1 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-medium transition">Link TMDB</button>
+                <button onclick="adminToolDelTmdb()" class="px-4 py-1.5 rounded-lg bg-rose-600/30 text-rose-300 hover:bg-rose-600/40 font-medium transition">Clear TMDB</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Banner & Presentation -->
+          <div class="glass-card rounded-2xl p-6 space-y-4 border border-white/10 text-xs">
+            <h3 class="font-bold text-sm text-white flex items-center gap-2">
+              <span>🖼️</span> Banner Artwork & Toggle
+            </h3>
+            <div class="p-3.5 rounded-xl bg-slate-900/80 border border-white/5 space-y-2.5">
+              <div class="flex gap-2">
+                <input type="text" id="am-banner-pfx" maxlength="3" placeholder="Prefix" class="w-24 px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-white font-mono uppercase text-xs">
+                <button onclick="adminToolToggleBanner()" class="flex-1 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium transition">Toggle Poster / Backdrop</button>
+              </div>
+              <div class="space-y-1">
+                <input type="text" id="am-banner-url" placeholder="Custom Image URL (https://...)" class="w-full px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-white text-xs">
+              </div>
+              <div class="flex gap-2">
+                <button onclick="adminToolSetBanner()" class="flex-1 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-medium transition">Set Custom Banner</button>
+                <button onclick="adminToolResetBanner()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white font-medium transition">Reset to TMDB</button>
+              </div>
+            </div>
+
+            <!-- Series Seasons -->
+            <h3 class="font-bold text-sm text-white flex items-center gap-2 pt-2">
+              <span>📺</span> Series Season Episode Mapper
+            </h3>
+            <div class="p-3.5 rounded-xl bg-slate-900/80 border border-white/5 space-y-2.5">
+              <div class="grid grid-cols-4 gap-2">
+                <input type="text" id="am-sn-pfx" maxlength="3" placeholder="Prefix" class="px-2 py-2 rounded-xl bg-slate-950 border border-white/10 text-white font-mono uppercase text-xs">
+                <input type="number" id="am-sn-num" value="1" placeholder="Season" class="px-2 py-2 rounded-xl bg-slate-950 border border-white/10 text-white text-xs">
+                <input type="number" id="am-sn-start" value="1" placeholder="Start Ep" class="px-2 py-2 rounded-xl bg-slate-950 border border-white/10 text-white text-xs">
+                <input type="number" id="am-sn-end" value="10" placeholder="End Ep" class="px-2 py-2 rounded-xl bg-slate-950 border border-white/10 text-white text-xs">
+              </div>
+              <div class="flex gap-2">
+                <button onclick="adminToolSetSeason()" class="flex-1 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-medium transition">Map Season</button>
+                <button onclick="adminToolDelSeason()" class="px-3 py-1.5 rounded-lg bg-rose-600/30 text-rose-300 hover:bg-rose-600/40 font-medium transition">Del Season</button>
+                <button onclick="adminToolClearSeasons()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white font-medium transition">Clear All</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sync Trigger -->
+        <div class="glass-card rounded-2xl p-5 border border-white/10 flex items-center justify-between text-xs">
+          <div>
+            <h4 class="font-bold text-white">Full System Metadata Refresh</h4>
+            <p class="text-slate-400 mt-0.5">Scans all indexed media partitions and updates TMDB posters, ratings, and synopses.</p>
+          </div>
+          <button onclick="adminToolRefreshMetadata()" id="btn-admin-refresh-meta" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-semibold flex items-center gap-2 transition active:scale-95 shadow">
+            <span>🔄</span> Sync & Refresh All
+          </button>
+        </div>
       </div>
 
       <!-- SUBVIEW: OVERVIEW STATS -->
@@ -500,7 +673,12 @@
       <div class="relative h-44 sm:h-56 bg-slate-900 overflow-hidden flex-shrink-0">
         <img id="m-modal-backdrop" src="" alt="Backdrop" class="w-full h-full object-cover opacity-40">
         <div class="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/60 to-transparent"></div>
-        <button onclick="closeMediaModal()" class="absolute top-4 right-4 w-8 h-8 rounded-full bg-slate-900/80 hover:bg-slate-800 text-slate-300 flex items-center justify-center transition border border-white/10">&times;</button>
+        <div class="absolute top-4 right-4 flex items-center gap-2">
+          <button onclick="openTelegram()" title="Open Telegram App" class="px-2.5 py-1 rounded-full bg-slate-900/80 hover:bg-slate-800 text-sky-400 flex items-center gap-1.5 transition border border-white/10 text-xs font-semibold">
+            <span>✈️</span> Telegram
+          </button>
+          <button onclick="closeMediaModal()" class="w-8 h-8 rounded-full bg-slate-900/80 hover:bg-slate-800 text-slate-300 flex items-center justify-center transition border border-white/10">&times;</button>
+        </div>
         <div class="absolute bottom-4 left-6 right-6 flex items-end gap-4">
           <img id="m-modal-poster" src="" alt="Poster" class="w-20 h-28 sm:w-24 sm:h-36 rounded-xl object-cover shadow-2xl border border-white/20 flex-shrink-0">
           <div class="space-y-1">
@@ -636,6 +814,111 @@
   </div>
 
   <!-- ========================================== -->
+  <!-- MODAL: EDIT REMINDER MODAL                 -->
+  <!-- ========================================== -->
+  <div id="edit-reminder-modal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+    <div class="glass-modal rounded-3xl max-w-md w-full p-6 space-y-4 border border-white/10">
+      <div class="flex justify-between items-center">
+        <h3 class="font-bold text-base text-white flex items-center gap-2">
+          <span>✏️</span> Edit Countdown Reminder
+        </h3>
+        <button onclick="closeEditReminderModal()" class="text-slate-400 hover:text-white">&times;</button>
+      </div>
+      <input type="hidden" id="er-id">
+      <div class="space-y-3 text-xs">
+        <div>
+          <label class="block text-slate-300 mb-1 font-medium">Event Label / Title</label>
+          <input type="text" id="er-label" placeholder="e.g. Birthday Party, Final Exam..."
+            class="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500 text-sm">
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-slate-300 mb-1 font-medium">Target Date</label>
+            <input type="date" id="er-date" class="w-full px-3 py-2 rounded-xl bg-slate-900 border border-white/10 text-white focus:outline-none focus:ring-2 focus:ring-sky-500 text-xs">
+          </div>
+          <div>
+            <label class="block text-slate-300 mb-1 font-medium">Alert Time</label>
+            <input type="time" id="er-time" value="09:00" class="w-full px-3 py-2 rounded-xl bg-slate-900 border border-white/10 text-white focus:outline-none focus:ring-2 focus:ring-sky-500 text-xs">
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-slate-300 mb-1 font-medium">Category</label>
+            <select id="er-category" class="w-full px-3 py-2 rounded-xl bg-slate-900 border border-white/10 text-white focus:outline-none focus:ring-2 focus:ring-sky-500 text-xs">
+              <option value="General">General</option>
+              <option value="Birthday">Birthday 🎂</option>
+              <option value="Deadline">Deadline ⏳</option>
+              <option value="Travel">Travel ✈️</option>
+              <option value="Bill">Bill / Payment 💳</option>
+              <option value="Event">Event 🎉</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-slate-300 mb-1 font-medium">Recurrence</label>
+            <select id="er-recurrence" class="w-full px-3 py-2 rounded-xl bg-slate-900 border border-white/10 text-white focus:outline-none focus:ring-2 focus:ring-sky-500 text-xs">
+              <option value="once">One-off Event</option>
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+              <option value="annually">Annually</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 pt-2">
+        <button onclick="closeEditReminderModal()" class="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-medium hover:bg-slate-700 transition">Cancel</button>
+        <button onclick="submitEditReminder()" class="px-4 py-2 rounded-xl bg-sky-600 text-white text-xs font-medium hover:bg-sky-500 transition">Save Changes</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================== -->
+  <!-- MODAL: ADMIN USER MODERATION               -->
+  <!-- ========================================== -->
+  <div id="admin-user-modal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+    <div class="glass-modal rounded-3xl max-w-sm w-full p-6 space-y-4 border border-white/10">
+      <div class="flex justify-between items-center">
+        <h3 class="font-bold text-base text-white flex items-center gap-2">
+          <span>👥</span> User Moderation
+        </h3>
+        <button onclick="closeAdminUserModal()" class="text-slate-400 hover:text-white">&times;</button>
+      </div>
+      <div class="space-y-3 text-xs text-slate-300">
+        <div>
+          <label class="block text-slate-300 mb-1 font-medium">User ID or @Username</label>
+          <input type="text" id="aum-user-id" placeholder="e.g. 12345678 or @username"
+            class="w-full px-3 py-2 rounded-xl bg-slate-900 border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500 text-xs">
+        </div>
+        <div>
+          <label class="block text-slate-300 mb-1 font-medium">Action</label>
+          <select id="aum-action" onchange="toggleUserModalFields()" class="w-full px-3 py-2 rounded-xl bg-slate-900 border border-white/10 text-white focus:outline-none focus:ring-2 focus:ring-sky-500 text-xs">
+            <option value="grant">Grant Access</option>
+            <option value="revoke">Revoke Access</option>
+            <option value="freeze">Freeze Access</option>
+            <option value="unfreeze">Unfreeze Access</option>
+            <option value="ban">Ban User</option>
+            <option value="unban">Unban User</option>
+          </select>
+        </div>
+        <div id="aum-prefix-group">
+          <label class="block text-slate-300 mb-1 font-medium">Partition Prefix</label>
+          <input type="text" id="aum-prefix" value="0" placeholder="e.g. LOK or 0 for all"
+            class="w-full px-3 py-2 rounded-xl bg-slate-900 border border-white/10 text-white focus:outline-none focus:ring-2 focus:ring-sky-500 text-xs font-mono uppercase">
+        </div>
+        <div id="aum-duration-group">
+          <label class="block text-slate-300 mb-1 font-medium">Duration (optional)</label>
+          <input type="text" id="aum-duration" placeholder="e.g. 24h, 7d, 30m (leave blank for permanent)"
+            class="w-full px-3 py-2 rounded-xl bg-slate-900 border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500 text-xs">
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 pt-2">
+        <button onclick="closeAdminUserModal()" class="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-medium hover:bg-slate-700 transition">Cancel</button>
+        <button onclick="submitAdminUserModal()" class="px-4 py-2 rounded-xl bg-sky-600 text-white text-xs font-medium hover:bg-sky-500 transition">Execute</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================== -->
   <!-- MODAL: LOGIN / AUTH HELPER                 -->
   <!-- ========================================== -->
   <div id="auth-modal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
@@ -648,18 +931,91 @@
       </div>
       <div class="space-y-3 text-xs text-slate-300">
         <p>To connect your Telegram identity and unlock personal features:</p>
-        <div class="p-3 rounded-xl bg-sky-500/10 border border-sky-500/20 text-sky-300">
-          1. Open the bot in Telegram<br>
-          2. Type <code class="bg-sky-950 px-1.5 py-0.5 rounded font-mono text-white">/web</code><br>
-          3. Click the generated magic link to sign in instantly!
+        <div class="p-3.5 rounded-2xl bg-sky-500/10 border border-sky-500/20 text-sky-300 space-y-2.5">
+          <div class="flex items-center justify-between">
+            <span class="font-semibold text-white">Step 1: Open the Bot</span>
+            <button onclick="openTelegram()" class="px-3 py-1 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-semibold text-xs flex items-center gap-1.5 transition active:scale-95 shadow">
+              <span>✈️</span> Open App
+            </button>
+          </div>
+          <div>Step 2: Type <code class="bg-sky-950 px-1.5 py-0.5 rounded font-mono text-white">/web</code> in the bot chat</div>
+          <div>Step 3: Copy your 6-digit PIN or click the direct login link!</div>
         </div>
-        <p class="text-[11px] text-slate-400">Or paste an authentication token below:</p>
-        <input type="text" id="auth-token-input" placeholder="Paste login token here..."
-          class="w-full px-3 py-2 rounded-xl bg-slate-900 border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500 text-xs">
+        <div>
+          <label class="block text-[11px] text-slate-400 mb-1 font-medium">Paste 6-digit PIN code, full login URL, or token below:</label>
+          <input type="text" id="auth-token-input" placeholder="e.g. 123456 or paste login link..."
+            class="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500 text-xs">
+        </div>
       </div>
       <div class="flex justify-end gap-2 pt-2">
         <button onclick="closeAuthModal()" class="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-medium hover:bg-slate-700 transition">Close</button>
         <button onclick="submitManualToken()" class="px-4 py-2 rounded-xl bg-sky-600 text-white text-xs font-medium hover:bg-sky-500 transition">Authenticate</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================== -->
+  <!-- MODAL: TELEGRAM LAUNCHER (OS-AWARE)        -->
+  <!-- ========================================== -->
+  <div id="telegram-launcher-modal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+    <div class="glass-modal rounded-3xl max-w-sm w-full p-6 space-y-4 border border-white/10">
+      <div class="flex justify-between items-center">
+        <h3 class="font-bold text-base text-white flex items-center gap-2">
+          <span>✈️</span> Open Telegram
+        </h3>
+        <button onclick="closeTelegramLauncher()" class="text-slate-400 hover:text-white text-lg">&times;</button>
+      </div>
+
+      <div class="space-y-3 text-xs text-slate-300">
+        <!-- OS BADGE -->
+        <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-900 border border-white/5">
+          <span class="text-slate-400">Detected Operating System:</span>
+          <span id="tg-detected-os-badge" class="px-2 py-0.5 rounded-lg bg-sky-500/20 text-sky-300 font-bold font-mono">Detecting...</span>
+        </div>
+
+        <p class="text-slate-400 text-[11px]">Choose your preferred option to launch the bot:</p>
+
+        <!-- OPTIONS -->
+        <div class="space-y-2">
+          <!-- Primary OS App Option -->
+          <button id="tg-opt-app-btn" onclick="executeTgAppLaunch()" class="w-full p-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-medium flex items-center justify-between transition active:scale-95 shadow">
+            <span class="flex items-center gap-2.5">
+              <span id="tg-opt-app-icon" class="text-base">📱</span>
+              <span id="tg-opt-app-label" class="text-left font-semibold">Open in Telegram App</span>
+            </span>
+            <span class="text-[10px] bg-sky-700/60 px-2 py-0.5 rounded uppercase font-bold">Recommended</span>
+          </button>
+
+          <!-- Telegram Web Option -->
+          <button onclick="executeTgWebLaunch()" class="w-full p-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-200 border border-white/5 font-medium flex items-center justify-between transition active:scale-95">
+            <span class="flex items-center gap-2.5">
+              <span class="text-base">🌐</span>
+              <span class="text-left">Open Telegram Web</span>
+            </span>
+            <span class="text-[10px] text-slate-400 font-mono">web.telegram.org</span>
+          </button>
+
+          <!-- Direct t.me Link -->
+          <button onclick="executeTgDirectLaunch()" class="w-full p-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-200 border border-white/5 font-medium flex items-center justify-between transition active:scale-95">
+            <span class="flex items-center gap-2.5">
+              <span class="text-base">🔗</span>
+              <span class="text-left">Direct Browser Link</span>
+            </span>
+            <span class="text-[10px] text-slate-400 font-mono">t.me link</span>
+          </button>
+        </div>
+
+        <!-- Copy Bot Link -->
+        <div class="pt-1 flex items-center justify-between p-2 rounded-xl bg-slate-950 border border-white/5">
+          <code id="tg-bot-username-display" class="text-sky-400 font-mono text-[11px]">@OpinionatedBot</code>
+          <button onclick="copyTelegramBotLink()" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-medium transition">
+            📋 Copy
+          </button>
+        </div>
+      </div>
+
+      <div class="flex justify-end pt-2">
+        <button onclick="closeTelegramLauncher()" class="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-medium hover:bg-slate-700 transition">Close</button>
       </div>
     </div>
   </div>
@@ -671,6 +1027,7 @@
     // --- STATE MANAGEMENT ---
     const State = {
       user: null,
+      botUsername: '',
       activeTab: 'ascii',
       asciiFonts: {},
       reminders: [],
@@ -695,9 +1052,156 @@
       return fetch(url, options);
     }
 
+    // --- SMART OS-AWARE DEEP LINKING & HELPERS ---
+    function detectOS() {
+      const ua = navigator.userAgent || navigator.vendor || window.opera || '';
+      if (/android/i.test(ua)) return 'Android';
+      if (/iPad|iPhone|iPod/.test(ua) && !window.MSStream) return 'iOS';
+      if (/Macintosh|Mac OS X/i.test(ua)) return 'macOS';
+      if (/Windows/i.test(ua)) return 'Windows';
+      if (/Linux/i.test(ua)) return 'Linux';
+      return 'Unknown';
+    }
+
+    let _activeStartParam = '';
+
+    function getTgUrls() {
+      const domain = State.botUsername || 'Telegram';
+      const param = _activeStartParam ? `&start=${encodeURIComponent(_activeStartParam)}` : '';
+      const queryParam = _activeStartParam ? `?start=${encodeURIComponent(_activeStartParam)}` : '';
+      const os = detectOS();
+
+      let appUrl = `tg://resolve?domain=${domain}${param}`;
+      if (os === 'Android') {
+        appUrl = `tg://resolve?domain=${domain}${param}`;
+      }
+
+      const webUrl = `https://web.telegram.org/a/#?tgaddr=${encodeURIComponent(`tg://resolve?domain=${domain}${param}`)}`;
+      const directUrl = `https://t.me/${domain}${queryParam}`;
+
+      return { appUrl, webUrl, directUrl, domain };
+    }
+
+    function openTelegram(startParam = '') {
+      _activeStartParam = startParam || '';
+      const os = detectOS();
+      const domain = State.botUsername || 'Telegram';
+
+      // Update modal UI based on detected OS
+      const osBadge = document.getElementById('tg-detected-os-badge');
+      const appIcon = document.getElementById('tg-opt-app-icon');
+      const appLabel = document.getElementById('tg-opt-app-label');
+      const botDisplay = document.getElementById('tg-bot-username-display');
+
+      if (botDisplay) botDisplay.innerText = `@${domain}`;
+
+      let osName = os;
+      let icon = '📱';
+      let label = 'Open Telegram App';
+
+      if (os === 'iOS') {
+        osName = 'iOS (iPhone / iPad)';
+        icon = '🍏';
+        label = 'Open in Telegram for iOS';
+      } else if (os === 'Android') {
+        osName = 'Android Mobile';
+        icon = '🤖';
+        label = 'Open in Telegram for Android';
+      } else if (os === 'macOS') {
+        osName = 'macOS Desktop';
+        icon = '💻';
+        label = 'Open Telegram Desktop / Mac';
+      } else if (os === 'Windows') {
+        osName = 'Windows Desktop';
+        icon = '🪟';
+        label = 'Open Telegram for Windows';
+      } else if (os === 'Linux') {
+        osName = 'Linux Desktop';
+        icon = '🐧';
+        label = 'Open Telegram Desktop';
+      }
+
+      if (osBadge) osBadge.innerText = osName;
+      if (appIcon) appIcon.innerText = icon;
+      if (appLabel) appLabel.innerText = label;
+
+      // Execute primary OS app launch
+      executeTgAppLaunch(true);
+
+      // Open chooser modal so user has all options if app launch didn't engage
+      const modal = document.getElementById('telegram-launcher-modal');
+      if (modal) modal.classList.remove('hidden');
+    }
+
+    function closeTelegramLauncher() {
+      const modal = document.getElementById('telegram-launcher-modal');
+      if (modal) modal.classList.add('hidden');
+    }
+
+    function executeTgAppLaunch(isAuto = false) {
+      const { appUrl } = getTgUrls();
+      const os = detectOS();
+
+      if (os === 'Linux' && isAuto) {
+        // On Linux, tg:// protocol is often unhandled; don't force auto-redirect
+        return;
+      }
+
+      window.location.href = appUrl;
+      if (!isAuto) {
+        showToast("Launching Telegram app...", "info");
+      }
+    }
+
+    function executeTgWebLaunch() {
+      const { directUrl } = getTgUrls();
+      window.open(directUrl, '_blank');
+      closeTelegramLauncher();
+    }
+
+    function executeTgDirectLaunch() {
+      const { directUrl } = getTgUrls();
+      window.open(directUrl, '_blank');
+      closeTelegramLauncher();
+    }
+
+    function copyTelegramBotLink() {
+      const { directUrl, domain } = getTgUrls();
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(`@${domain} (${directUrl})`).then(() => {
+          showToast(`Copied @${domain} link to clipboard!`, "success");
+        }).catch(() => {
+          showToast(`Bot username: @${domain}`, "info");
+        });
+      } else {
+        showToast(`Bot username: @${domain}`, "info");
+      }
+    }
+
+    function createSvgFallback(title, width = 300, height = 450, bgColor = '#1e293b', textColor = '#94a3b8') {
+      const safeTitle = (title || 'Media')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+      const fontSize = width > 500 ? 32 : 16;
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="${width}" height="${height}" fill="${bgColor}"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="${textColor}" font-family="sans-serif" font-weight="bold" font-size="${fontSize}">${safeTitle}</text></svg>`;
+      try {
+        return 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg)));
+      } catch (e) {
+        return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+      }
+    }
+
     // --- INITIALIZATION ---
     document.addEventListener("DOMContentLoaded", async () => {
-      // 1. Process URL query parameters (token from /login redirect or auth status)
+      // 1. Fetch bot status for username
+      fetch('/api/status').then(r => r.json()).then(d => {
+        if (d.bot_username) State.botUsername = d.bot_username;
+      }).catch(() => {});
+
+      // 2. Process URL query parameters (token from /login redirect or auth status)
       const urlParams = new URLSearchParams(window.location.search);
       const urlToken = urlParams.get('token');
       if (urlToken) {
@@ -835,22 +1339,55 @@
     }
 
     async function submitManualToken() {
-      const token = document.getElementById('auth-token-input').value.trim();
-      if (!token) return;
+      const raw = document.getElementById('auth-token-input').value.trim();
+      if (!raw) return;
+
+      const payload = {};
+      if (raw.startsWith('token=')) {
+        payload.token = raw.slice(6).trim();
+      } else if (raw.startsWith('pin=')) {
+        payload.pin = raw.slice(4).trim();
+      } else if (raw.startsWith('http://') || raw.startsWith('https://') || raw.includes('?') || raw.includes('/login') || raw.includes('/auth')) {
+        try {
+          const urlMatch = raw.match(/https?:\/\/[^\s<>"]+/);
+          const urlToParse = urlMatch ? urlMatch[0] : raw;
+          const url = new URL(urlToParse, window.location.origin);
+          const pin = url.searchParams.get('pin');
+          const token = url.searchParams.get('token');
+          if (pin) payload.pin = pin;
+          else if (token) payload.token = token;
+          else payload.token = raw;
+        } catch (e) {
+          payload.token = raw;
+        }
+      } else if (/^\d{6}$/.test(raw)) {
+        payload.pin = raw;
+      } else {
+        const pinMatch = raw.match(/\b(\d{6})\b/);
+        if (pinMatch && !raw.includes('.')) {
+          payload.pin = pinMatch[1];
+        } else {
+          payload.token = raw;
+        }
+      }
+
       try {
         const res = await fetch('/api/auth/token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token })
+          body: JSON.stringify(payload)
         });
         const data = await res.json();
         if (data.success) {
-          if (data.token || token) localStorage.setItem('auth_token', data.token || token);
+          if (data.token) localStorage.setItem('auth_token', data.token);
           State.user = data.user;
           renderUserHeader();
           closeAuthModal();
           showToast("Authenticated successfully!", "success");
           loadReminders();
+          if (State.user && State.user.is_admin) {
+            loadAdminStats();
+          }
         } else {
           showToast(data.error || "Authentication failed.", "error");
         }
@@ -1064,6 +1601,21 @@
 
         const catIcons = { Birthday: '🎂', Deadline: '⏳', Travel: '✈️', Bill: '💳', Event: '🎉', General: '📌' };
         const catIcon = catIcons[r.category] || '📌';
+        const isBirthday = (
+          (r.category || '').toLowerCase() === 'birthday' ||
+          (r.label || '').toLowerCase().includes('birthday') ||
+          (r.label || '').includes('🎂')
+        );
+        const doneBtn = isBirthday ? '' : `
+          <button onclick="completeReminder('${r._id || r.id}')" title="Mark Done" class="px-2.5 py-1.5 rounded-lg bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 transition flex items-center gap-1">
+            ✅ Done
+          </button>
+        `;
+        const editBtn = `
+          <button onclick="openEditReminderModal('${r._id || r.id}')" title="Edit Reminder" class="px-2.5 py-1.5 rounded-lg bg-sky-600/20 text-sky-300 hover:bg-sky-600/30 transition flex items-center gap-1">
+            ✏️ Edit
+          </button>
+        `;
 
         return `
           <div class="glass-card rounded-2xl p-5 border border-white/10 flex flex-col justify-between space-y-4 hover:border-sky-500/30 transition group">
@@ -1090,9 +1642,8 @@
                 <button onclick="snoozeReminder('${r._id || r.id}')" title="Snooze 1 Day" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition flex items-center gap-1">
                   💤 +1d
                 </button>
-                <button onclick="completeReminder('${r._id || r.id}')" title="Mark Done" class="px-2.5 py-1.5 rounded-lg bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 transition flex items-center gap-1">
-                  ✅ Done
-                </button>
+                ${doneBtn}
+                ${editBtn}
               </div>
               <button onclick="deleteReminder('${r._id || r.id}')" title="Delete" class="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
@@ -1228,6 +1779,53 @@
       }
     }
 
+    function openEditReminderModal(id) {
+      const r = State.reminders.find(item => (item._id || item.id) === id);
+      if (!r) return;
+      document.getElementById('er-id').value = id;
+      document.getElementById('er-label').value = r.label || '';
+      document.getElementById('er-date').value = r.target_date || '';
+      document.getElementById('er-time').value = r.reminder_time || '09:00';
+      document.getElementById('er-category').value = r.category || 'General';
+      document.getElementById('er-recurrence').value = r.recurrence || 'once';
+      document.getElementById('edit-reminder-modal').classList.remove('hidden');
+    }
+
+    function closeEditReminderModal() {
+      document.getElementById('edit-reminder-modal').classList.add('hidden');
+    }
+
+    async function submitEditReminder() {
+      const id = document.getElementById('er-id').value;
+      const label = document.getElementById('er-label').value.trim();
+      const target_date = document.getElementById('er-date').value;
+      const reminder_time = document.getElementById('er-time').value;
+      const category = document.getElementById('er-category').value;
+      const recurrence = document.getElementById('er-recurrence').value;
+
+      if (!label || !target_date) {
+        return showToast("Please fill in the title and target date.", "error");
+      }
+
+      try {
+        const res = await authFetch(`/api/reminders/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ label, target_date, reminder_time, category, recurrence })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast("Reminder updated successfully!", "success");
+          closeEditReminderModal();
+          await loadReminders();
+        } else {
+          showToast(data.error || "Failed to update reminder.", "error");
+        }
+      } catch (e) {
+        showToast("Error updating reminder.", "error");
+      }
+    }
+
     // --- VIEW 3: MEDIA CATALOG CONTROLLER ---
     function buildAlphabetBar() {
       const container = document.getElementById('media-alpha-bar');
@@ -1309,7 +1907,7 @@
       }
 
       grid.innerHTML = State.mediaItems.map(item => {
-        const posterFallback = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="450" viewBox="0 0 300 450"><rect width="300" height="450" fill="%231e293b"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%2394a3b8" font-family="sans-serif" font-size="16">${encodeURIComponent(item.name || item.prefix)}</text></svg>`;
+        const posterFallback = createSvgFallback(item.name || item.prefix, 300, 450);
         const poster = item.poster_url || posterFallback;
         const rating = item.rating ? `⭐ ${item.rating}` : '';
         const catBadge = item.category === 'series' ? '📺 Series' : '🎬 Movie';
@@ -1317,7 +1915,7 @@
         return `
           <div onclick="openMediaDetailModal('${item.prefix}')" class="glass-card rounded-2xl overflow-hidden cursor-pointer hover:border-sky-500/50 hover:shadow-xl hover:shadow-sky-500/10 transition-all duration-300 group flex flex-col justify-between">
             <div class="relative aspect-[2/3] bg-slate-950 overflow-hidden">
-              <img src="${poster}" alt="${escapeHtml(item.name)}" class="w-full h-full object-cover group-hover:scale-105 transition duration-500">
+              <img src="${poster}" alt="${escapeHtml(item.name || item.prefix)}" onerror="this.onerror=null;this.src='${posterFallback}';" class="w-full h-full object-cover group-hover:scale-105 transition duration-500">
               <div class="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-transparent opacity-80"></div>
               
               <!-- Badges -->
@@ -1330,7 +1928,7 @@
 
               <div class="absolute bottom-2 left-2 right-2">
                 <span class="text-[10px] font-mono-custom text-sky-400 bg-sky-500/10 px-1.5 py-0.5 rounded">${item.prefix}</span>
-                <h4 class="font-bold text-xs sm:text-sm text-white line-clamp-2 mt-0.5">${escapeHtml(item.name)}</h4>
+                <h4 class="font-bold text-xs sm:text-sm text-white line-clamp-2 mt-0.5">${escapeHtml(item.name || item.prefix)}</h4>
                 ${item.year ? `<span class="text-[10px] text-slate-400">${item.year}</span>` : ''}
               </div>
             </div>
@@ -1348,9 +1946,24 @@
         State.selectedMediaItem = data.item;
         const item = data.item;
 
-        document.getElementById('m-modal-title').innerText = item.name;
-        document.getElementById('m-modal-poster').src = item.poster_url || '';
-        document.getElementById('m-modal-backdrop').src = item.backdrop_url || item.poster_url || '';
+        const posterFallback = createSvgFallback(item.name || item.prefix, 300, 450);
+        const backdropFallback = createSvgFallback(item.name || item.prefix, 1280, 720, '#0f172a', '#334155');
+
+        document.getElementById('m-modal-title').innerText = item.name || item.prefix;
+        const posterEl = document.getElementById('m-modal-poster');
+        posterEl.onerror = function() {
+          this.onerror = null;
+          this.src = posterFallback;
+        };
+        posterEl.src = item.poster_url || posterFallback;
+
+        const backdropEl = document.getElementById('m-modal-backdrop');
+        backdropEl.onerror = function() {
+          this.onerror = null;
+          this.src = backdropFallback;
+        };
+        backdropEl.src = item.backdrop_url || item.poster_url || backdropFallback;
+
         document.getElementById('m-modal-rating').innerText = item.rating ? `⭐ ${item.rating}/10` : '';
         document.getElementById('m-modal-genres').innerText = item.genres || '';
         document.getElementById('m-modal-overview').innerText = item.overview || 'No synopsis description attached.';
@@ -1408,35 +2021,70 @@
 
     function renderModalSeasonEpisodes() {
       const item = State.selectedMediaItem;
-      const snNum = parseInt(document.getElementById('m-modal-season-select').value);
-      const snObj = item.seasons.find(s => s.num === snNum);
+      if (!item) return;
+      const sel = document.getElementById('m-modal-season-select');
+      const snNum = parseInt(sel.value);
+      const snObj = (item.seasons || []).find(s => s.num === snNum);
       const list = document.getElementById('m-modal-episodes-list');
 
-      if (!snObj) return;
-      const eps = [];
-      for (let i = snObj.start; i <= snObj.end; i++) {
-        eps.push(`${item.prefix}${String(i).padStart(3, '0')}`);
+      if (!snObj) {
+        if (item.files && item.files.length) {
+          list.innerHTML = item.files.map((f, idx) => `
+            <div class="p-3 rounded-xl bg-slate-900/80 border border-white/5 flex items-center justify-between gap-3 text-xs">
+              <div class="flex items-center gap-2.5 truncate">
+                <span class="font-mono-custom text-sky-400 bg-sky-500/10 px-2 py-0.5 rounded text-[11px]">${f.code}</span>
+                <span class="text-slate-200 font-medium truncate">${escapeHtml(f.file_name || f.caption || `Episode ${idx + 1}`)}</span>
+              </div>
+              <button onclick="deliverMedia('${f.code}')" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-medium flex items-center gap-1.5 transition active:scale-95 shadow-sm flex-shrink-0">
+                🚀 Deliver
+              </button>
+            </div>
+          `).join('');
+        } else {
+          list.innerHTML = `<p class="text-xs text-slate-500 py-3">No episodes configured for this season.</p>`;
+        }
+        return;
       }
 
-      const fileMap = {};
-      (item.files || []).forEach(f => {
-        if (f.code) fileMap[f.code] = f;
+      const eps = [];
+      const start = Number.isInteger(snObj.start) ? snObj.start : 1;
+      const end = Number.isInteger(snObj.end) ? snObj.end : start;
+      for (let i = start; i <= end; i++) {
+        eps.push({ num: i, code: `${item.prefix}${String(i).padStart(3, '0')}` });
+      }
+
+      const fileMapByCode = {};
+      const fileMapByNum = {};
+      const fileMapBySeasonEp = {};
+      (item.files || []).forEach((f) => {
+        if (f.code) {
+          fileMapByCode[f.code.toUpperCase()] = f;
+          const match = f.code.match(/(\d+)$/);
+          if (match) fileMapByNum[parseInt(match[1], 10)] = f;
+        }
+        const text = `${f.file_name || ''} ${f.caption || ''}`;
+        const seMatch = text.match(/[sS]0*(\d+)[._\s-]*[eE]0*(\d+)/) || text.match(/(\d+)x0*(\d+)/);
+        if (seMatch) {
+          fileMapBySeasonEp[`${parseInt(seMatch[1], 10)}_${parseInt(seMatch[2], 10)}`] = f;
+        }
       });
 
-      list.innerHTML = eps.map((code, idx) => {
-        const f = fileMap[code];
-        const label = f ? (f.file_name || f.caption || `Episode ${idx + 1}`) : `Episode ${idx + 1}`;
+      list.innerHTML = eps.map((ep) => {
+        const code = ep.code;
+        const f = fileMapBySeasonEp[`${snNum}_${ep.num}`] || fileMapByCode[code.toUpperCase()] || fileMapByNum[ep.num];
+        const label = f ? (f.file_name || f.caption || `Episode ${ep.num}`) : `Episode ${ep.num}`;
+        const deliverCode = f && f.code ? f.code : code;
         return `
-        <div class="p-3 rounded-xl bg-slate-900/80 border border-white/5 flex items-center justify-between gap-3 text-xs">
-          <div class="flex items-center gap-2.5 truncate">
-            <span class="font-mono-custom text-sky-400 bg-sky-500/10 px-2 py-0.5 rounded text-[11px]">${code}</span>
-            <span class="text-slate-200 font-medium truncate">${escapeHtml(label)}</span>
+          <div class="p-3 rounded-xl bg-slate-900/80 border border-white/5 flex items-center justify-between gap-3 text-xs">
+            <div class="flex items-center gap-2.5 truncate">
+              <span class="font-mono-custom text-sky-400 bg-sky-500/10 px-2 py-0.5 rounded text-[11px]">${deliverCode}</span>
+              <span class="text-slate-200 font-medium truncate">${escapeHtml(label)}</span>
+            </div>
+            <button onclick="deliverMedia('${deliverCode}')" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-medium flex items-center gap-1.5 transition active:scale-95 shadow-sm flex-shrink-0">
+              🚀 Deliver
+            </button>
           </div>
-          <button onclick="deliverMedia('${code}')" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-medium flex items-center gap-1.5 transition active:scale-95 shadow-sm flex-shrink-0">
-            🚀 Deliver
-          </button>
-        </div>
-      `;
+        `;
       }).join('');
     }
 
@@ -1511,13 +2159,22 @@
     // --- VIEW 4: ADMIN PORTAL CONTROLLER ---
     function setAdminSubTab(sub) {
       State.adminSubTab = sub;
-      ['overview', 'keys', 'access', 'logs'].forEach(s => {
-        document.getElementById(`admin-sub-${s}`).classList.remove('bg-sky-600', 'text-white');
-        document.getElementById(`admin-sub-${s}`).classList.add('bg-slate-900', 'text-slate-400');
-        document.getElementById(`admin-view-${s}`).classList.add('hidden');
+      ['overview', 'files', 'media_admin', 'keys', 'access', 'logs'].forEach(s => {
+        const btn = document.getElementById(`admin-sub-${s}`);
+        const view = document.getElementById(`admin-view-${s}`);
+        if (btn) {
+          btn.classList.remove('bg-sky-600', 'text-white');
+          btn.classList.add('bg-slate-900', 'text-slate-400');
+        }
+        if (view) view.classList.add('hidden');
       });
-      document.getElementById(`admin-sub-${sub}`).classList.add('bg-sky-600', 'text-white');
-      document.getElementById(`admin-view-${sub}`).classList.remove('hidden');
+      const activeBtn = document.getElementById(`admin-sub-${sub}`);
+      const activeView = document.getElementById(`admin-view-${sub}`);
+      if (activeBtn) {
+        activeBtn.classList.remove('bg-slate-900', 'text-slate-400');
+        activeBtn.classList.add('bg-sky-600', 'text-white');
+      }
+      if (activeView) activeView.classList.remove('hidden');
 
       if (sub === 'keys') loadAdminKeys();
       if (sub === 'access') loadAdminAccess();
@@ -1649,45 +2306,411 @@
       });
     }
 
+    // --- ADMIN TOOLS: PARTITION & FILES ---
+    async function adminToolLock() {
+      const prefix = document.getElementById('af-lock-prefix').value.trim();
+      const password = document.getElementById('af-lock-pass').value.trim();
+      if (!prefix || !password) return showToast("Prefix and passkey are required.", "error");
+
+      try {
+        const res = await authFetch('/api/admin/file/lock', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prefix, password })
+        });
+        const data = await res.json();
+        showToast(data.message || data.error, data.success ? "success" : "error");
+        if (data.success) {
+          document.getElementById('af-lock-pass').value = '';
+          loadAdminKeys();
+          loadAdminStats();
+        }
+      } catch (e) {
+        showToast("Error locking partition.", "error");
+      }
+    }
+
+    async function adminToolUnlock() {
+      const prefix = document.getElementById('af-lock-prefix').value.trim();
+      if (!prefix) return showToast("Prefix is required.", "error");
+
+      try {
+        const res = await authFetch('/api/admin/file/unlock', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prefix })
+        });
+        const data = await res.json();
+        showToast(data.message || data.error, data.success ? "success" : "error");
+        if (data.success) {
+          loadAdminKeys();
+          loadAdminStats();
+        }
+      } catch (e) {
+        showToast("Error unlocking partition.", "error");
+      }
+    }
+
+    async function adminToolChangePasskey() {
+      const prefix = document.getElementById('af-rot-prefix').value.trim();
+      const old_passkey = document.getElementById('af-rot-old').value.trim();
+      const new_passkey = document.getElementById('af-rot-new').value.trim();
+      if (!prefix || !old_passkey || !new_passkey) return showToast("All passkey rotation fields are required.", "error");
+
+      try {
+        const res = await authFetch('/api/admin/file/change_passkey', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prefix, old_passkey, new_passkey })
+        });
+        const data = await res.json();
+        showToast(data.message || data.error, data.success ? "success" : "error");
+        if (data.success) {
+          document.getElementById('af-rot-old').value = '';
+          document.getElementById('af-rot-new').value = '';
+          loadAdminKeys();
+        }
+      } catch (e) {
+        showToast("Error rotating passkey.", "error");
+      }
+    }
+
+    async function adminToolMovePrefix() {
+      const old_prefix = document.getElementById('af-mv-old').value.trim();
+      const new_prefix = document.getElementById('af-mv-new').value.trim();
+      if (!old_prefix || !new_prefix) return showToast("Both old and new prefix are required.", "error");
+      if (!confirm(`Migrate all assets and labels from prefix ${old_prefix.toUpperCase()} to ${new_prefix.toUpperCase()}?`)) return;
+
+      try {
+        const res = await authFetch('/api/admin/file/mv', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ old_prefix, new_prefix })
+        });
+        const data = await res.json();
+        showToast(data.message || data.error, data.success ? "success" : "error");
+        if (data.success) {
+          loadAdminKeys();
+          loadMediaItems();
+        }
+      } catch (e) {
+        showToast("Error migrating prefix.", "error");
+      }
+    }
+
+    async function adminToolDelSingle() {
+      const code = document.getElementById('af-del-single').value.trim();
+      if (!code) return showToast("Asset code is required.", "error");
+      if (!confirm(`Permanently delete asset ${code.toUpperCase()}?`)) return;
+
+      try {
+        const res = await authFetch('/api/admin/file/del', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: 'single', code })
+        });
+        const data = await res.json();
+        showToast(data.message || data.error, data.success ? "success" : "error");
+        if (data.success) {
+          document.getElementById('af-del-single').value = '';
+          loadAdminStats();
+          loadMediaItems();
+        }
+      } catch (e) {
+        showToast("Error deleting asset.", "error");
+      }
+    }
+
+    async function adminToolDelRange() {
+      const prefix = document.getElementById('af-del-range-pfx').value.trim();
+      const start = document.getElementById('af-del-range-start').value;
+      const end = document.getElementById('af-del-range-end').value;
+      if (!prefix || !start || !end) return showToast("Prefix, start and end numbers required.", "error");
+      if (!confirm(`Permanently delete assets ${prefix.toUpperCase()}${start} through ${prefix.toUpperCase()}${end}?`)) return;
+
+      try {
+        const res = await authFetch('/api/admin/file/del', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: 'range', prefix, start: parseInt(start), end: parseInt(end) })
+        });
+        const data = await res.json();
+        showToast(data.message || data.error, data.success ? "success" : "error");
+        if (data.success) {
+          loadAdminStats();
+          loadMediaItems();
+        }
+      } catch (e) {
+        showToast("Error deleting range.", "error");
+      }
+    }
+
+    // --- ADMIN TOOLS: MEDIA & TMDB ---
+    async function adminToolSetLabel() {
+      const prefix = document.getElementById('am-label-pfx').value.trim();
+      const category = document.getElementById('am-label-cat').value;
+      const name = document.getElementById('am-label-title').value.trim();
+      if (!prefix || !name) return showToast("Prefix and catalog title are required.", "error");
+
+      try {
+        const res = await authFetch('/api/admin/media/label/set', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prefix, category, name })
+        });
+        const data = await res.json();
+        showToast(data.message || data.error, data.success ? "success" : "error");
+        if (data.success) loadMediaItems();
+      } catch (e) {
+        showToast("Error setting label.", "error");
+      }
+    }
+
+    async function adminToolDelLabel() {
+      const prefix = document.getElementById('am-label-pfx').value.trim();
+      if (!prefix) return showToast("Prefix is required.", "error");
+      if (!confirm(`Remove catalog label for prefix ${prefix.toUpperCase()}?`)) return;
+
+      try {
+        const res = await authFetch('/api/admin/media/label/del', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prefix })
+        });
+        const data = await res.json();
+        showToast(data.message || data.error, data.success ? "success" : "error");
+        if (data.success) loadMediaItems();
+      } catch (e) {
+        showToast("Error removing label.", "error");
+      }
+    }
+
+    async function adminToolSetTmdb() {
+      const prefix = document.getElementById('am-tmdb-pfx').value.trim();
+      const query = document.getElementById('am-tmdb-query').value.trim();
+      if (!prefix || !query) return showToast("Prefix and query/ID are required.", "error");
+
+      showToast("Linking TMDB metadata...", "info");
+      try {
+        const res = await authFetch('/api/admin/media/tmdb/set', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prefix, query })
+        });
+        const data = await res.json();
+        showToast(data.message || data.error, data.success ? "success" : "error");
+        if (data.success) loadMediaItems();
+      } catch (e) {
+        showToast("Error linking TMDB.", "error");
+      }
+    }
+
+    async function adminToolDelTmdb() {
+      const prefix = document.getElementById('am-tmdb-pfx').value.trim();
+      if (!prefix) return showToast("Prefix is required.", "error");
+
+      try {
+        const res = await authFetch('/api/admin/media/tmdb/del', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prefix })
+        });
+        const data = await res.json();
+        showToast(data.message || data.error, data.success ? "success" : "error");
+        if (data.success) loadMediaItems();
+      } catch (e) {
+        showToast("Error clearing TMDB.", "error");
+      }
+    }
+
+    async function adminToolToggleBanner() {
+      const prefix = document.getElementById('am-banner-pfx').value.trim();
+      if (!prefix) return showToast("Prefix is required.", "error");
+
+      try {
+        const res = await authFetch('/api/admin/media/banner', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prefix, action: 'toggle' })
+        });
+        const data = await res.json();
+        showToast(data.message || data.error, data.success ? "success" : "error");
+        if (data.success) loadMediaItems();
+      } catch (e) {
+        showToast("Error toggling banner.", "error");
+      }
+    }
+
+    async function adminToolSetBanner() {
+      const prefix = document.getElementById('am-banner-pfx').value.trim();
+      const banner_url = document.getElementById('am-banner-url').value.trim();
+      if (!prefix || !banner_url) return showToast("Prefix and image URL are required.", "error");
+
+      try {
+        const res = await authFetch('/api/admin/media/banner', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prefix, action: 'set', banner_url })
+        });
+        const data = await res.json();
+        showToast(data.message || data.error, data.success ? "success" : "error");
+        if (data.success) loadMediaItems();
+      } catch (e) {
+        showToast("Error setting banner.", "error");
+      }
+    }
+
+    async function adminToolResetBanner() {
+      const prefix = document.getElementById('am-banner-pfx').value.trim();
+      if (!prefix) return showToast("Prefix is required.", "error");
+
+      try {
+        const res = await authFetch('/api/admin/media/banner', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prefix, action: 'reset' })
+        });
+        const data = await res.json();
+        showToast(data.message || data.error, data.success ? "success" : "error");
+        if (data.success) loadMediaItems();
+      } catch (e) {
+        showToast("Error resetting banner.", "error");
+      }
+    }
+
+    async function adminToolSetSeason() {
+      const prefix = document.getElementById('am-sn-pfx').value.trim();
+      const season_num = document.getElementById('am-sn-num').value;
+      const start_ep = document.getElementById('am-sn-start').value;
+      const end_ep = document.getElementById('am-sn-end').value;
+      if (!prefix || !season_num || !start_ep || !end_ep) return showToast("All season mapper fields are required.", "error");
+
+      try {
+        const res = await authFetch('/api/admin/media/season/set', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prefix, season_num: parseInt(season_num), start_ep: parseInt(start_ep), end_ep: parseInt(end_ep) })
+        });
+        const data = await res.json();
+        showToast(data.message || data.error, data.success ? "success" : "error");
+      } catch (e) {
+        showToast("Error mapping season.", "error");
+      }
+    }
+
+    async function adminToolDelSeason() {
+      const prefix = document.getElementById('am-sn-pfx').value.trim();
+      const season_num = document.getElementById('am-sn-num').value;
+      if (!prefix || !season_num) return showToast("Prefix and season number are required.", "error");
+
+      try {
+        const res = await authFetch('/api/admin/media/season/del', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prefix, season_num: parseInt(season_num) })
+        });
+        const data = await res.json();
+        showToast(data.message || data.error, data.success ? "success" : "error");
+      } catch (e) {
+        showToast("Error removing season.", "error");
+      }
+    }
+
+    async function adminToolClearSeasons() {
+      const prefix = document.getElementById('am-sn-pfx').value.trim();
+      if (!prefix) return showToast("Prefix is required.", "error");
+      if (!confirm(`Clear all season mappings for prefix ${prefix.toUpperCase()}?`)) return;
+
+      try {
+        const res = await authFetch('/api/admin/media/season/clear', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prefix })
+        });
+        const data = await res.json();
+        showToast(data.message || data.error, data.success ? "success" : "error");
+      } catch (e) {
+        showToast("Error clearing seasons.", "error");
+      }
+    }
+
+    async function adminToolRefreshMetadata() {
+      const btn = document.getElementById('btn-admin-refresh-meta');
+      if (btn) btn.disabled = true;
+      showToast("Syncing TMDB metadata in background...", "info");
+
+      try {
+        const res = await authFetch('/api/admin/media/refresh', { method: 'POST' });
+        const data = await res.json();
+        showToast(data.message || data.error, data.success ? "success" : "error");
+        if (data.success) loadMediaItems();
+      } catch (e) {
+        showToast("Error triggering metadata sync.", "error");
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    // --- ADMIN USER MODERATION MODAL ---
+    function openAdminUserModal(userId = '', action = 'grant') {
+      document.getElementById('aum-user-id').value = userId;
+      document.getElementById('aum-action').value = action;
+      toggleUserModalFields();
+      document.getElementById('admin-user-modal').classList.remove('hidden');
+    }
+
+    function closeAdminUserModal() {
+      document.getElementById('admin-user-modal').classList.add('hidden');
+    }
+
+    function toggleUserModalFields() {
+      const action = document.getElementById('aum-action').value;
+      const pfxGrp = document.getElementById('aum-prefix-group');
+      const durGrp = document.getElementById('aum-duration-group');
+
+      if (action === 'ban' || action === 'unban') {
+        pfxGrp.classList.add('hidden');
+        durGrp.classList.add('hidden');
+      } else if (action === 'revoke' || action === 'unfreeze') {
+        pfxGrp.classList.remove('hidden');
+        durGrp.classList.add('hidden');
+      } else {
+        pfxGrp.classList.remove('hidden');
+        durGrp.classList.remove('hidden');
+      }
+    }
+
+    async function submitAdminUserModal() {
+      const userId = document.getElementById('aum-user-id').value.trim();
+      const action = document.getElementById('aum-action').value;
+      const prefix = document.getElementById('aum-prefix').value.trim() || '0';
+      const duration = document.getElementById('aum-duration').value.trim();
+
+      if (!userId) return showToast("User ID or @username is required.", "error");
+
+      try {
+        const res = await authFetch(`/api/admin/user/${action}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: userId, prefix, duration })
+        });
+        const data = await res.json();
+        showToast(data.message || data.error, data.success ? "success" : "error");
+        if (data.success) {
+          closeAdminUserModal();
+          loadAdminAccess();
+        }
+      } catch (e) {
+        showToast("Error updating user.", "error");
+      }
+    }
+
     function openAdminGrantModal() {
-      const uid = prompt("Enter User ID or numeric ID to grant access:");
-      if (!uid) return;
-      const prefix = prompt("Enter partition prefix (or 0 for all partitions):", "0");
-      if (!prefix) return;
-      const duration = prompt("Enter duration (e.g. 24h, 7d, 30m or leave blank for permanent):", "");
-      authFetch('/api/admin/user/grant', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: uid, prefix, duration })
-      })
-      .then(r => r.json())
-      .then(d => {
-        showToast(d.message || d.error, d.success ? "success" : "error");
-        loadAdminAccess();
-      });
+      openAdminUserModal('', 'grant');
     }
 
     function adminUserActionPrompt(userId) {
-      const action = prompt(`Choose action for user ${userId}:\n(grant / revoke / freeze / unfreeze / ban / unban)`);
-      if (!action) return;
-      let prefix = "0";
-      let duration = "";
-      if (['grant', 'revoke', 'freeze', 'unfreeze'].includes(action.toLowerCase())) {
-        prefix = prompt("Target partition prefix (or 0 for all):", "0") || "0";
-        if (['grant', 'freeze'].includes(action.toLowerCase())) {
-          duration = prompt("Duration (e.g. 24h, 7d) or leave blank:", "");
-        }
-      }
-      authFetch(`/api/admin/user/${action.toLowerCase()}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: userId, prefix, duration })
-      })
-      .then(r => r.json())
-      .then(d => {
-        showToast(d.message || d.error, d.success ? "success" : "error");
-        loadAdminAccess();
-      });
+      openAdminUserModal(userId, 'grant');
     }
 
     // --- UI NOTIFICATIONS (TOASTS) ---

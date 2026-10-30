@@ -43,6 +43,7 @@ from services.access import (
 from services.ascii_art import SUPPORTED_ASCII_FONTS, generate_ascii_art
 from utils.auth import (
     generate_auth_token,
+    verify_auth_pin,
     verify_auth_token,
     verify_telegram_init_data,
 )
@@ -218,21 +219,29 @@ def index():
     return "Opinionated Telegram Bot & Companion Online."
 
 
+@flask_app.route('/auth')
 @flask_app.route('/login')
 def web_login():
-    """Handles Telegram magic link authentication via HMAC token."""
-    token = request.args.get('token')
-    if not token:
-        return redirect('/?auth=missing')
+    """Handles Telegram magic link authentication via HMAC token or PIN."""
+    token = request.args.get('token', '').strip()
+    pin = request.args.get('pin', '').strip()
 
-    user_info = verify_auth_token(token)
+    user_info = None
+    if pin:
+        user_info = verify_auth_pin(pin)
+    elif token and re.match(r'^\d{6}$', token):
+        user_info = verify_auth_pin(token)
+    elif token:
+        user_info = verify_auth_token(token)
+
     if not user_info:
-        return redirect('/?auth=invalid')
+        return redirect('/?auth=invalid' if (token or pin) else '/?auth=missing')
 
     session['user_id'] = user_info['user_id']
     session['username'] = user_info['username']
     session['is_admin'] = user_info['is_admin']
-    return redirect(f'/?auth=success&token={token}')
+    effective_token = token if (token and '.' in token) else generate_auth_token(user_info['user_id'], user_info['username'])
+    return redirect(f'/?auth=success&token={effective_token}')
 
 
 @flask_app.route('/logout')
@@ -266,10 +275,19 @@ if TOKEN:
 
 @flask_app.route('/api/status', methods=['GET'])
 def api_status():
-    """Returns general server status and connectivity state."""
+    """Returns general server status, bot username, and connectivity state."""
+    bot_uname = ""
+    if _application and getattr(_application, "bot", None):
+        try:
+            bot_uname = getattr(_application.bot, "username", "") or ""
+        except Exception:
+            pass
+    if not bot_uname:
+        bot_uname = os.getenv("BOT_USERNAME", "")
     return jsonify({
         "status": "operational",
         "bot_active": bool(_application is not None),
+        "bot_username": bot_uname,
         "database_connected": bool(codes_col is not None),
         "timestamp": int(time.time())
     })
@@ -297,15 +315,67 @@ def api_auth_me():
 
 @flask_app.route('/api/auth/token', methods=['POST'])
 def api_auth_token():
-    """Validates an HMAC token or Telegram WebApp initData string."""
+    """Validates an HMAC token, 6-digit PIN, pasted URL, or Telegram WebApp initData string."""
     payload = request.get_json(force=True, silent=True) or {}
-    token = payload.get('token')
+    raw_token = str(payload.get('token', '')).strip()
+    raw_pin = str(payload.get('pin', '')).strip()
     init_data = payload.get('init_data')
 
     user_info = None
-    if token:
-        user_info = verify_auth_token(token)
-    elif init_data:
+    token_to_verify = raw_token
+
+    # 1. Direct PIN parameter
+    if raw_pin:
+        user_info = verify_auth_pin(raw_pin)
+
+    # 2. Extract token/PIN from pasted URL, prefix, or text if needed
+    if not user_info and token_to_verify:
+        from urllib.parse import parse_qs, urlparse
+
+        # If user pasted "token=..." or "pin=..." directly
+        if token_to_verify.startswith("token="):
+            token_to_verify = token_to_verify[6:].strip()
+        elif token_to_verify.startswith("pin="):
+            raw_pin = token_to_verify[4:].strip()
+            user_info = verify_auth_pin(raw_pin)
+
+        if not user_info and ("http://" in token_to_verify or "https://" in token_to_verify or "?" in token_to_verify or "token=" in token_to_verify or "pin=" in token_to_verify):
+            try:
+                url_match = re.search(r'https?://[^\s<>"]+', token_to_verify)
+                target_url = url_match.group(0) if url_match else token_to_verify
+                parsed = urlparse(target_url)
+                qs = parse_qs(parsed.query)
+                if not qs and '=' in parsed.path:
+                    qs = parse_qs(parsed.path)
+                if 'pin' in qs and qs['pin']:
+                    pin_cand = qs['pin'][0].strip()
+                    user_info = verify_auth_pin(pin_cand)
+                if not user_info and 'token' in qs and qs['token']:
+                    tok_cand = qs['token'][0].strip()
+                    if re.match(r'^\d{6}$', tok_cand):
+                        user_info = verify_auth_pin(tok_cand)
+                    else:
+                        token_to_verify = tok_cand
+            except Exception:
+                pass
+
+        # Also extract 6-digit PIN if pasted inside text (e.g. "PIN: 123456")
+        if not user_info and not token_to_verify.startswith("ey"):
+            pin_match = re.search(r'\b(\d{6})\b', token_to_verify)
+            if pin_match:
+                cand_pin = pin_match.group(1)
+                user_info = verify_auth_pin(cand_pin)
+
+    # 3. Check if token_to_verify is a 6-digit PIN
+    if not user_info and token_to_verify and re.match(r'^\d{6}$', token_to_verify):
+        user_info = verify_auth_pin(token_to_verify)
+
+    # 4. HMAC Token verification
+    if not user_info and token_to_verify:
+        user_info = verify_auth_token(token_to_verify)
+
+    # 5. Telegram WebApp initData
+    if not user_info and init_data:
         user_info = verify_telegram_init_data(init_data)
 
     if not user_info:
@@ -316,7 +386,7 @@ def api_auth_token():
     session['is_admin'] = user_info['is_admin']
 
     # Always provide an active companion token for Bearer authentication
-    issued_token = token if token else generate_auth_token(user_info['user_id'], user_info['username'])
+    issued_token = token_to_verify if (token_to_verify and "." in token_to_verify) else generate_auth_token(user_info['user_id'], user_info['username'])
 
     return jsonify({
         "success": True,
@@ -636,6 +706,98 @@ def api_reminders_delete(reminder_id):
         return jsonify({"success": False, "error": "Failed to delete reminder."}), 500
 
 
+@flask_app.route('/api/reminders/<reminder_id>', methods=['PUT', 'PATCH'])
+@login_required
+def api_reminders_update(reminder_id):
+    """Updates an existing reminder (label, category, date, time, recurrence)."""
+    user = get_current_user()
+    user_id = user['user_id']
+    payload = request.get_json(force=True, silent=True) or {}
+
+    async def _update():
+        if reminders_col is None:
+            return "db_unavailable", None
+        try:
+            oid = ObjectId(reminder_id)
+        except Exception:
+            return "invalid_id", None
+
+        rec = await reminders_col.find_one({"_id": oid, "user_id": user_id})
+        if not rec:
+            return "not_found", None
+
+        updates = {}
+        if "label" in payload:
+            label = str(payload["label"]).strip()
+            if not label:
+                return "empty_label", None
+            if len(label) > 120:
+                return "label_too_long", None
+            updates["label"] = label
+
+        if "category" in payload:
+            cat = str(payload["category"]).strip()
+            if cat:
+                updates["category"] = cat
+
+        if "target_date" in payload:
+            t_date_str = str(payload["target_date"]).strip()
+            try:
+                datetime.strptime(t_date_str, "%Y-%m-%d")
+                updates["target_date"] = t_date_str
+                updates["last_notified"] = ""
+            except ValueError:
+                return "invalid_date", None
+
+        if "reminder_time" in payload:
+            r_time = str(payload["reminder_time"]).strip()
+            try:
+                parts = r_time.split(":")
+                if len(parts) == 2 and 0 <= int(parts[0]) <= 23 and 0 <= int(parts[1]) <= 59:
+                    updates["reminder_time"] = f"{int(parts[0]):02d}:{int(parts[1]):02d}"
+            except Exception:
+                pass
+
+        if "recurrence" in payload:
+            rec_val = str(payload["recurrence"]).strip().lower()
+            if rec_val in ["once", "daily", "weekly", "monthly", "annually"]:
+                updates["recurrence"] = rec_val
+
+        if "timezone" in payload:
+            updates["timezone"] = str(payload["timezone"]).strip() or "UTC"
+
+        if not updates:
+            return "no_updates", serialize_doc(rec)
+
+        await reminders_col.update_one({"_id": oid}, {"$set": updates})
+        updated_rec = await reminders_col.find_one({"_id": oid})
+
+        if _application is not None and updated_rec:
+            schedule_reminder_job(_application, updated_rec)
+
+        return "success", serialize_doc(updated_rec)
+
+    try:
+        status, updated_doc = run_async(_update())
+        if status == "db_unavailable":
+            return jsonify({"success": False, "error": "Database unavailable."}), 500
+        if status == "invalid_id":
+            return jsonify({"success": False, "error": "Invalid reminder ID."}), 400
+        if status == "not_found":
+            return jsonify({"success": False, "error": "Reminder not found."}), 404
+        if status == "empty_label":
+            return jsonify({"success": False, "error": "Reminder label cannot be empty."}), 400
+        if status == "label_too_long":
+            return jsonify({"success": False, "error": "Label must be under 120 characters."}), 400
+        if status == "invalid_date":
+            return jsonify({"success": False, "error": "Invalid date format. Expected YYYY-MM-DD."}), 400
+
+        return jsonify({"success": True, "reminder": updated_doc})
+    except Exception as e:
+        logger.error(f"Error updating reminder: {e}")
+        return jsonify({"success": False, "error": "Failed to update reminder."}), 500
+
+
 # --- REST API: MEDIA LIBRARY & TELEGRAM DELIVERY ---
 
 @flask_app.route('/api/media/categories', methods=['GET'])
@@ -774,13 +936,13 @@ def api_media_item_detail(prefix):
         label_rec = await prefix_labels_col.find_one({"prefix": pfx}) if prefix_labels_col is not None else None
         if not label_rec:
             # Check codes_col for unindexed prefix
-            code_sample = await codes_col.find_one({"code": {"$regex": f"^{re.escape(pfx)}"}}) if codes_col is not None else None
+            code_sample = await codes_col.find_one({"code": {"$regex": f"^{re.escape(pfx)}", "$options": "i"}}) if codes_col is not None else None
             if not code_sample:
                 return None
             label_rec = {"prefix": pfx, "name": pfx, "category": "movie"}
 
         cursor = codes_col.find(
-            {"code": {"$regex": f"^{re.escape(pfx)}"}},
+            {"code": {"$regex": f"^{re.escape(pfx)}", "$options": "i"}},
             {"code": 1, "file_name": 1, "caption": 1, "file_type": 1, "chat_id": 1}
         ).sort("code", 1) if codes_col is not None else None
         files = await cursor.to_list(length=300) if cursor else []
@@ -799,6 +961,20 @@ def api_media_item_detail(prefix):
         tmdb = label_rec.get("tmdb") or {}
         poster = label_rec.get("custom_banner") or tmdb.get("poster_url") or tmdb.get("backdrop_url") or ""
         backdrop = tmdb.get("backdrop_url") or poster
+        seasons_raw = label_rec.get("seasons", [])
+        clean_seasons = []
+        if isinstance(seasons_raw, list):
+            for s in seasons_raw:
+                if isinstance(s, dict) and "num" in s:
+                    try:
+                        clean_seasons.append({
+                            "num": int(s["num"]),
+                            "start": int(s.get("start", 1)),
+                            "end": int(s.get("end", 1))
+                        })
+                    except (ValueError, TypeError):
+                        continue
+            clean_seasons.sort(key=lambda x: x["num"])
 
         return {
             "prefix": pfx,
@@ -810,7 +986,7 @@ def api_media_item_detail(prefix):
             "year": tmdb.get("year"),
             "genres": tmdb.get("genres"),
             "overview": tmdb.get("overview"),
-            "seasons": label_rec.get("seasons", []),
+            "seasons": clean_seasons,
             "is_locked": is_locked,
             "files": [serialize_doc(f) for f in files]
         }
@@ -1232,7 +1408,7 @@ def api_admin_user_action(action):
             gate = await group_keys_col.find_one({"prefix": prefix}) if group_keys_col is not None else None
             chat_id = gate.get("chat_id", 0) if gate else 0
             if (not chat_id or chat_id == 0) and codes_col is not None:
-                sample = await codes_col.find_one({"code": {"$regex": f"^{re.escape(prefix)}"}}, {"chat_id": 1})
+                sample = await codes_col.find_one({"code": {"$regex": f"^{re.escape(prefix)}", "$options": "i"}}, {"chat_id": 1})
                 if sample and sample.get("chat_id"):
                     chat_id = sample["chat_id"]
             keys_to_target = [f"{chat_id}_{prefix}", prefix]
@@ -1314,10 +1490,11 @@ def api_admin_user_action(action):
 @flask_app.route('/api/admin/file/lock', methods=['POST'])
 @admin_required
 def api_admin_file_lock():
-    """Sets or updates the secret passkey for a partition."""
+    """Sets or updates the secret passkey for a partition (or all unlocked partitions if prefix='0')."""
+    from pymongo import UpdateOne
     payload = request.get_json(force=True, silent=True) or {}
     prefix = str(payload.get('prefix', '')).strip().upper()
-    password = str(payload.get('password', '')).strip()
+    password = str(payload.get('password') or payload.get('passkey') or '').strip()
     chat_id = int(payload.get('chat_id', 0))
 
     if not prefix or not password:
@@ -1325,26 +1502,55 @@ def api_admin_file_lock():
 
     async def _lock():
         if group_keys_col is None:
-            return False
+            return 0
 
-        target_chat_id = chat_id
-        if target_chat_id == 0 and codes_col is not None:
-            sample = await codes_col.find_one({"code": {"$regex": f"^{re.escape(prefix)}"}}, {"chat_id": 1})
-            if sample and sample.get("chat_id"):
-                target_chat_id = sample["chat_id"]
+        if prefix == "0":
+            if codes_col is None:
+                return 0
+            pipeline = [
+                {"$project": {"prefix": {"$substr": ["$code", 0, 3]}, "chat_id": 1}},
+                {"$group": {"_id": {"prefix": "$prefix", "chat_id": "$chat_id"}}}
+            ]
+            all_groups = await codes_col.aggregate(pipeline).to_list(length=200)
+            locked_prefixes = set()
+            async for k in group_keys_col.find({}):
+                locked_prefixes.add(k.get("prefix"))
 
-        await group_keys_col.update_one(
-            {"prefix": prefix},
-            {"$set": {"secret_key": password, "chat_id": target_chat_id}},
-            upsert=True
-        )
-        invalidate_group_keys_cache(prefix)
-        await log_event(ADMIN_ID, "ADMIN", f"Locked {prefix} with passkey via Web")
-        return True
+            unlocked = [g['_id'] for g in all_groups if g['_id']['prefix'] not in locked_prefixes]
+            ops = []
+            for g in unlocked:
+                p = g['prefix']
+                cid = g['chat_id']
+                ops.append(UpdateOne(
+                    {"prefix": p},
+                    {"$set": {"secret_key": password, "chat_id": cid}},
+                    upsert=True
+                ))
+            if ops:
+                await group_keys_col.bulk_write(ops, ordered=False)
+            invalidate_group_keys_cache()
+            await log_event(ADMIN_ID, "ADMIN", f"Locked all {len(ops)} unlocked partitions with passkey via Web")
+            return len(ops)
+        else:
+            target_chat_id = chat_id
+            if target_chat_id == 0 and codes_col is not None:
+                sample = await codes_col.find_one({"code": {"$regex": f"^{re.escape(prefix)}", "$options": "i"}}, {"chat_id": 1})
+                if sample and sample.get("chat_id"):
+                    target_chat_id = sample["chat_id"]
+
+            await group_keys_col.update_one(
+                {"prefix": prefix},
+                {"$set": {"secret_key": password, "chat_id": target_chat_id}},
+                upsert=True
+            )
+            invalidate_group_keys_cache(prefix)
+            await log_event(ADMIN_ID, "ADMIN", f"Locked {prefix} with passkey via Web")
+            return 1
 
     try:
-        run_async(_lock())
-        return jsonify({"success": True, "message": f"Partition '{prefix}' locked with passkey."})
+        count = run_async(_lock())
+        msg = f"Locked all {count} unlocked partition(s) with passkey." if prefix == "0" else f"Partition '{prefix}' locked with passkey."
+        return jsonify({"success": True, "message": msg})
     except Exception as e:
         logger.error(f"Admin lock error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
@@ -1373,6 +1579,476 @@ def api_admin_file_unlock():
         return jsonify({"success": True, "message": f"Partition '{prefix}' unlocked."})
     except Exception as e:
         logger.error(f"Admin unlock error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@flask_app.route('/api/admin/file/change_passkey', methods=['POST'])
+@admin_required
+def api_admin_file_change_passkey():
+    """Rotates/changes passkey for a partition or across all partitions."""
+    payload = request.get_json(force=True, silent=True) or {}
+    prefix = str(payload.get('prefix', '')).strip().upper()
+    old_pass = str(payload.get('old_pass') or payload.get('old_passkey') or '').strip()
+    new_pass = str(payload.get('new_pass') or payload.get('new_passkey') or '').strip()
+
+    if not new_pass:
+        return jsonify({"success": False, "error": "New password is required."}), 400
+
+    async def _change():
+        if group_keys_col is None:
+            return "db_unavailable", 0
+        if prefix == "0":
+            if not old_pass:
+                return "old_pass_required", 0
+            res = await group_keys_col.update_many({"secret_key": old_pass}, {"$set": {"secret_key": new_pass}})
+            invalidate_group_keys_cache()
+            await log_event(ADMIN_ID, "ADMIN", f"Passkey rotated for {res.modified_count} partition(s)")
+            return "success", res.modified_count
+        else:
+            if not prefix:
+                return "prefix_required", 0
+            gate = await group_keys_col.find_one({"prefix": prefix})
+            if not gate:
+                return "not_found", 0
+            if old_pass and gate.get("secret_key", "").strip() != old_pass:
+                return "old_pass_mismatch", 0
+            await group_keys_col.update_one({"prefix": prefix}, {"$set": {"secret_key": new_pass}})
+            invalidate_group_keys_cache(prefix)
+            await log_event(ADMIN_ID, "ADMIN", f"Passkey rotated for {prefix}")
+            return "success", 1
+
+    try:
+        status, count = run_async(_change())
+        if status == "db_unavailable":
+            return jsonify({"success": False, "error": "Database unavailable."}), 500
+        if status == "prefix_required":
+            return jsonify({"success": False, "error": "Prefix is required."}), 400
+        if status == "old_pass_required":
+            return jsonify({"success": False, "error": "Old password is required when rotating all keys."}), 400
+        if status == "not_found":
+            return jsonify({"success": False, "error": f"Partition '{prefix}' is not locked."}), 404
+        if status == "old_pass_mismatch":
+            return jsonify({"success": False, "error": "Current passkey does not match."}), 400
+        return jsonify({"success": True, "message": f"Passkey updated for {count} partition(s)."})
+    except Exception as e:
+        logger.error(f"Change passkey error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@flask_app.route('/api/admin/file/mv', methods=['POST'])
+@admin_required
+def api_admin_file_mv():
+    """Migrates / renames prefix across assets, keys, and labels."""
+    from pymongo import UpdateOne
+    payload = request.get_json(force=True, silent=True) or {}
+    old_pfx = str(payload.get('old_prefix', '')).strip().upper()[:3]
+    new_pfx = str(payload.get('new_prefix', '')).strip().upper()[:3]
+
+    if not old_pfx or not new_pfx:
+        return jsonify({"success": False, "error": "Both old_prefix and new_prefix (3 chars) are required."}), 400
+    if old_pfx == new_pfx:
+        return jsonify({"success": False, "error": "Old and new prefixes cannot be identical."}), 400
+
+    async def _mv():
+        if codes_col is None:
+            return "db_unavailable", 0
+        cursor = codes_col.find({"code": {"$regex": f"^{re.escape(old_pfx)}", "$options": "i"}})
+        count = 0
+        ops = []
+        async for r in cursor:
+            old_code = r["code"]
+            new_code = f"{new_pfx}{old_code[3:]}"
+            ops.append(UpdateOne({"_id": r["_id"]}, {"$set": {"code": new_code}}))
+            count += 1
+            if len(ops) >= 500:
+                await codes_col.bulk_write(ops, ordered=False)
+                ops = []
+        if ops:
+            await codes_col.bulk_write(ops, ordered=False)
+
+        if group_keys_col is not None:
+            await group_keys_col.update_many({"prefix": old_pfx}, {"$set": {"prefix": new_pfx}})
+            invalidate_group_keys_cache()
+        if prefix_labels_col is not None:
+            await prefix_labels_col.update_many({"prefix": old_pfx}, {"$set": {"prefix": new_pfx}})
+
+        await log_event(ADMIN_ID, "ADMIN", f"Web Rename Prefix: {old_pfx} -> {new_pfx} ({count} items)")
+        return "success", count
+
+    try:
+        status, count = run_async(_mv())
+        if status == "db_unavailable":
+            return jsonify({"success": False, "error": "Database unavailable."}), 500
+        return jsonify({"success": True, "message": f"Successfully migrated {count} items from {old_pfx} to {new_pfx}."})
+    except Exception as e:
+        logger.error(f"Move prefix error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@flask_app.route('/api/admin/file/del', methods=['POST'])
+@admin_required
+def api_admin_file_del():
+    """Deletes a single file asset by code, or a surgical range of assets."""
+    payload = request.get_json(force=True, silent=True) or {}
+    code = str(payload.get('code', '')).strip().upper()
+    prefix = str(payload.get('prefix', '')).strip().upper()[:3]
+    start = payload.get('start')
+    end = payload.get('end')
+
+    if not code and not (prefix and start is not None and end is not None):
+        return jsonify({"success": False, "error": "Provide either 'code' for single deletion, or 'prefix', 'start', 'end' for range deletion."}), 400
+
+    async def _del():
+        if codes_col is None:
+            return "db_unavailable", 0
+        if code:
+            res = await codes_col.delete_one({"code": code})
+            if res.deleted_count > 0:
+                await log_event(ADMIN_ID, "ADMIN", f"Web Del Single: {code}")
+                return "success", res.deleted_count
+            return "not_found", 0
+        else:
+            try:
+                s_int = int(start)
+                e_int = int(end)
+                if s_int < 1 or e_int < s_int or (e_int - s_int + 1) > 100:
+                    return "range_limit", 0
+                target_codes = [f"{prefix}{i:03d}" for i in range(s_int, e_int + 1)]
+                res = await codes_col.delete_many({"code": {"$in": target_codes}})
+                await log_event(ADMIN_ID, "ADMIN", f"Web Range Del: {prefix}{s_int:03d}-{e_int:03d} ({res.deleted_count} items)")
+                return "success", res.deleted_count
+            except ValueError:
+                return "invalid_range", 0
+
+    try:
+        status, count = run_async(_del())
+        if status == "db_unavailable":
+            return jsonify({"success": False, "error": "Database unavailable."}), 500
+        if status == "not_found":
+            return jsonify({"success": False, "error": f"File '{code}' not found."}), 404
+        if status == "range_limit":
+            return jsonify({"success": False, "error": "Range error: Maximum 100 items can be deleted at once."}), 400
+        if status == "invalid_range":
+            return jsonify({"success": False, "error": "Start and end must be integers."}), 400
+        return jsonify({"success": True, "message": f"Deleted {count} asset(s)."})
+    except Exception as e:
+        logger.error(f"Admin del error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@flask_app.route('/api/admin/media/label/set', methods=['POST'])
+@admin_required
+def api_admin_media_label_set():
+    """Assigns custom catalog title and category (movie or series) to a prefix."""
+    payload = request.get_json(force=True, silent=True) or {}
+    prefix = str(payload.get('prefix', '')).strip().upper()[:3]
+    category = str(payload.get('category', 'movie')).strip().lower()
+    title = str(payload.get('title') or payload.get('name') or '').strip()
+
+    if not prefix or not title:
+        return jsonify({"success": False, "error": "Prefix and title are required."}), 400
+    if category not in ["movie", "series"]:
+        return jsonify({"success": False, "error": "Category must be 'movie' or 'series'."}), 400
+
+    async def _set():
+        if prefix_labels_col is None:
+            return False
+        await prefix_labels_col.update_one(
+            {"prefix": prefix},
+            {"$set": {"name": title, "category": category}},
+            upsert=True
+        )
+        await log_event(ADMIN_ID, "ADMIN", f"Web Set Label: {prefix} -> {title} [{category}]")
+        return True
+
+    try:
+        run_async(_set())
+        return jsonify({"success": True, "message": f"Label set for {prefix}: {title} [{category}]."})
+    except Exception as e:
+        logger.error(f"Set label error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@flask_app.route('/api/admin/media/label/del', methods=['POST'])
+@admin_required
+def api_admin_media_label_del():
+    """Removes catalog title/category label from a prefix."""
+    payload = request.get_json(force=True, silent=True) or {}
+    prefix = str(payload.get('prefix', '')).strip().upper()[:3]
+    if not prefix:
+        return jsonify({"success": False, "error": "Prefix is required."}), 400
+
+    async def _del():
+        if prefix_labels_col is None:
+            return False
+        res = await prefix_labels_col.delete_one({"prefix": prefix})
+        await log_event(ADMIN_ID, "ADMIN", f"Web Del Label: {prefix}")
+        return res.deleted_count > 0
+
+    try:
+        deleted = run_async(_del())
+        if not deleted:
+            return jsonify({"success": False, "error": f"No label found for {prefix}."}), 404
+        return jsonify({"success": True, "message": f"Label for {prefix} removed."})
+    except Exception as e:
+        logger.error(f"Del label error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@flask_app.route('/api/admin/media/tmdb/set', methods=['POST'])
+@admin_required
+def api_admin_media_tmdb_set():
+    """Links TMDB metadata (poster, backdrop, rating, synopsis) to prefix."""
+    from services.tmdb import fetch_tmdb_metadata
+    payload = request.get_json(force=True, silent=True) or {}
+    prefix = str(payload.get('prefix', '')).strip().upper()[:3]
+    query = str(payload.get('query', '')).strip()
+
+    if not prefix or not query:
+        return jsonify({"success": False, "error": "Prefix and query / TMDB ID are required."}), 400
+
+    async def _set():
+        if prefix_labels_col is None:
+            return "db_unavailable", None
+        rec = await prefix_labels_col.find_one({"prefix": prefix})
+        category = rec.get("category", "movie") if rec else "movie"
+        tmdb_info = await fetch_tmdb_metadata(query, category)
+        if not tmdb_info:
+            return "not_found", None
+        tmdb_info["pinned"] = True
+        await prefix_labels_col.update_one(
+            {"prefix": prefix},
+            {"$set": {"tmdb": tmdb_info}, "$setOnInsert": {"name": tmdb_info.get("title", prefix), "category": category}},
+            upsert=True
+        )
+        await log_event(ADMIN_ID, "ADMIN", f"Web TMDB Set: {prefix} -> {tmdb_info.get('title')}")
+        return "success", tmdb_info
+
+    try:
+        status, data = run_async(_set())
+        if status == "db_unavailable":
+            return jsonify({"success": False, "error": "Database unavailable."}), 500
+        if status == "not_found":
+            return jsonify({"success": False, "error": f"No TMDB matches found for '{query}'."}), 404
+        return jsonify({"success": True, "message": f"Linked TMDB: {data.get('title')}", "tmdb": data})
+    except Exception as e:
+        logger.error(f"Set TMDB error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@flask_app.route('/api/admin/media/tmdb/del', methods=['POST'])
+@admin_required
+def api_admin_media_tmdb_del():
+    """Unlinks TMDB metadata from a prefix."""
+    payload = request.get_json(force=True, silent=True) or {}
+    prefix = str(payload.get('prefix', '')).strip().upper()[:3]
+    if not prefix:
+        return jsonify({"success": False, "error": "Prefix is required."}), 400
+
+    async def _del():
+        if prefix_labels_col is None:
+            return False
+        res = await prefix_labels_col.update_one({"prefix": prefix}, {"$unset": {"tmdb": ""}})
+        await log_event(ADMIN_ID, "ADMIN", f"Web TMDB Del: {prefix}")
+        return res.modified_count > 0
+
+    try:
+        modified = run_async(_del())
+        if not modified:
+            return jsonify({"success": False, "error": f"No TMDB metadata linked to {prefix}."}), 404
+        return jsonify({"success": True, "message": f"TMDB metadata unlinked from {prefix}."})
+    except Exception as e:
+        logger.error(f"Del TMDB error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@flask_app.route('/api/admin/media/banner', methods=['POST'])
+@admin_required
+def api_admin_media_banner():
+    """Controls banner mode (poster vs backdrop), custom banner URL, or reset."""
+    payload = request.get_json(force=True, silent=True) or {}
+    prefix = str(payload.get('prefix', '')).strip().upper()[:3]
+    action = str(payload.get('action', 'toggle')).strip().lower()
+    url = str(payload.get('url') or payload.get('banner_url') or '').strip()
+
+    if not prefix:
+        return jsonify({"success": False, "error": "Prefix is required."}), 400
+
+    async def _banner():
+        if prefix_labels_col is None:
+            return "db_unavailable", ""
+        rec = await prefix_labels_col.find_one({"prefix": prefix})
+        if not rec:
+            return "not_found", ""
+
+        if action == "toggle":
+            current_mode = rec.get("banner_mode", "poster")
+            new_mode = "backdrop" if current_mode == "poster" else "poster"
+            await prefix_labels_col.update_one(
+                {"prefix": prefix},
+                {"$set": {"banner_mode": new_mode}, "$unset": {"custom_banner": ""}}
+            )
+            await log_event(ADMIN_ID, "ADMIN", f"Web Banner Toggle: {prefix} -> {new_mode}")
+            return "toggled", new_mode
+        elif action in ["reset", "clear", "del"]:
+            await prefix_labels_col.update_one({"prefix": prefix}, {"$unset": {"custom_banner": ""}})
+            await log_event(ADMIN_ID, "ADMIN", f"Web Banner Reset: {prefix}")
+            return "reset", ""
+        elif action in ["set", "url"]:
+            if not url or not (url.startswith("http://") or url.startswith("https://")):
+                return "invalid_url", ""
+            await prefix_labels_col.update_one({"prefix": prefix}, {"$set": {"custom_banner": url}})
+            await log_event(ADMIN_ID, "ADMIN", f"Web Banner Set: {prefix} -> {url}")
+            return "set", url
+        return "invalid_action", ""
+
+    try:
+        status, val = run_async(_banner())
+        if status == "db_unavailable":
+            return jsonify({"success": False, "error": "Database unavailable."}), 500
+        if status == "not_found":
+            return jsonify({"success": False, "error": f"Partition {prefix} not found."}), 404
+        if status == "invalid_url":
+            return jsonify({"success": False, "error": "Valid HTTP/HTTPS image URL is required."}), 400
+        if status == "invalid_action":
+            return jsonify({"success": False, "error": "Action must be 'toggle', 'set', or 'reset'."}), 400
+        msg = f"Banner mode set to {val.upper()}." if status == "toggled" else ("Custom banner set." if status == "set" else "Custom banner reset to TMDB.")
+        return jsonify({"success": True, "message": msg})
+    except Exception as e:
+        logger.error(f"Banner action error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@flask_app.route('/api/admin/media/season/set', methods=['POST'])
+@admin_required
+def api_admin_media_season_set():
+    """Maps season episode range for series."""
+    payload = request.get_json(force=True, silent=True) or {}
+    prefix = str(payload.get('prefix', '')).strip().upper()[:3]
+    try:
+        sn_num = int(payload.get('num') or payload.get('season_num') or 1)
+        start = int(payload.get('start') or payload.get('start_ep') or 1)
+        end = int(payload.get('end') or payload.get('end_ep') or 1)
+    except (ValueError, TypeError):
+        return jsonify({"success": False, "error": "Season num, start, and end must be integers."}), 400
+
+    if not prefix:
+        return jsonify({"success": False, "error": "Prefix is required."}), 400
+    if start < 1 or end < start:
+        return jsonify({"success": False, "error": "Start must be >= 1 and end must be >= start."}), 400
+
+    async def _set():
+        if prefix_labels_col is None:
+            return False
+        rec = await prefix_labels_col.find_one({"prefix": prefix})
+        seasons = rec.get("seasons", []) if rec else []
+        seasons = [s for s in seasons if s.get("num") != sn_num]
+        seasons.append({"num": sn_num, "start": start, "end": end})
+        seasons.sort(key=lambda x: x["num"])
+        await prefix_labels_col.update_one(
+            {"prefix": prefix},
+            {"$set": {"seasons": seasons, "category": "series"}},
+            upsert=True
+        )
+        await log_event(ADMIN_ID, "ADMIN", f"Web Season Set: {prefix} S{sn_num} ({start}-{end})")
+        return True
+
+    try:
+        run_async(_set())
+        return jsonify({"success": True, "message": f"Season {sn_num} ({start}-{end}) mapped for {prefix}."})
+    except Exception as e:
+        logger.error(f"Season set error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@flask_app.route('/api/admin/media/season/del', methods=['POST'])
+@admin_required
+def api_admin_media_season_del():
+    """Deletes specific season mapping."""
+    payload = request.get_json(force=True, silent=True) or {}
+    prefix = str(payload.get('prefix', '')).strip().upper()[:3]
+    try:
+        sn_num = int(payload.get('num') or payload.get('season_num') or 1)
+    except (ValueError, TypeError):
+        return jsonify({"success": False, "error": "Season num must be an integer."}), 400
+
+    async def _del():
+        if prefix_labels_col is None:
+            return False
+        rec = await prefix_labels_col.find_one({"prefix": prefix})
+        if not rec or "seasons" not in rec:
+            return False
+        seasons = [s for s in rec.get("seasons", []) if s.get("num") != sn_num]
+        await prefix_labels_col.update_one({"prefix": prefix}, {"$set": {"seasons": seasons}})
+        await log_event(ADMIN_ID, "ADMIN", f"Web Season Del: {prefix} S{sn_num}")
+        return True
+
+    try:
+        deleted = run_async(_del())
+        if not deleted:
+            return jsonify({"success": False, "error": f"Season {sn_num} not found for {prefix}."}), 404
+        return jsonify({"success": True, "message": f"Season {sn_num} deleted for {prefix}."})
+    except Exception as e:
+        logger.error(f"Season del error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@flask_app.route('/api/admin/media/season/clear', methods=['POST'])
+@admin_required
+def api_admin_media_season_clear():
+    """Clears all mapped seasons for a prefix."""
+    payload = request.get_json(force=True, silent=True) or {}
+    prefix = str(payload.get('prefix', '')).strip().upper()[:3]
+    if not prefix:
+        return jsonify({"success": False, "error": "Prefix is required."}), 400
+
+    async def _clear():
+        if prefix_labels_col is None:
+            return False
+        await prefix_labels_col.update_one({"prefix": prefix}, {"$unset": {"seasons": ""}})
+        await log_event(ADMIN_ID, "ADMIN", f"Web Season Clear: {prefix}")
+        return True
+
+    try:
+        run_async(_clear())
+        return jsonify({"success": True, "message": f"All mapped seasons cleared for {prefix}."})
+    except Exception as e:
+        logger.error(f"Season clear error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@flask_app.route('/api/admin/media/refresh', methods=['POST'])
+@admin_required
+def api_admin_media_refresh():
+    """Triggers synchronization of TMDB metadata for all linked media."""
+    from services.tmdb import fetch_tmdb_metadata
+    async def _refresh():
+        if prefix_labels_col is None:
+            return 0
+        cursor = prefix_labels_col.find({"tmdb": {"$exists": True, "$ne": None}})
+        synced = 0
+        async for rec in cursor:
+            tmdb_obj = rec.get("tmdb")
+            if not tmdb_obj:
+                continue
+            query = str(tmdb_obj.get("id") or tmdb_obj.get("title") or rec.get("name") or rec.get("prefix"))
+            cat = rec.get("category", "movie")
+            try:
+                new_info = await fetch_tmdb_metadata(query, cat)
+                if new_info:
+                    new_info["pinned"] = True
+                    await prefix_labels_col.update_one({"_id": rec["_id"]}, {"$set": {"tmdb": new_info}})
+                    synced += 1
+            except Exception:
+                continue
+        await log_event(ADMIN_ID, "ADMIN", f"Web Media Refresh: {synced} titles updated")
+        return synced
+
+    try:
+        count = run_async(_refresh())
+        return jsonify({"success": True, "message": f"Successfully refreshed metadata for {count} titles."})
+    except Exception as e:
+        logger.error(f"Metadata refresh error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 

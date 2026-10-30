@@ -62,6 +62,7 @@ from handlers.media import (
     show_filtered_library_items,
 )
 from handlers.reminders import (
+    edit_reminder_command,
     get_reminder_conversation_handler,
     handle_reminder_callback,
     list_reminders,
@@ -101,7 +102,8 @@ def create_application():
 
     # --- Reminder Handlers ---
     app.add_handler(CommandHandler("list", list_reminders))
-    app.add_handler(CallbackQueryHandler(handle_reminder_callback, pattern="^(delrem_|remsnooze_|remdone_)"))
+    app.add_handler(CommandHandler(["editrem", "remind_edit"], edit_reminder_command))
+    app.add_handler(CallbackQueryHandler(handle_reminder_callback, pattern="^(delrem_|remsnooze_|remdone_|editrem_|edfield_|edset_)"))
     app.add_handler(get_reminder_conversation_handler())
 
     # --- Media Retrieval & Browsing Handlers ---

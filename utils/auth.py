@@ -2,10 +2,60 @@ import base64
 import hashlib
 import hmac
 import json
+import secrets
+import threading
 import time
 from urllib.parse import parse_qsl, unquote
 
 from config import ADMIN_ID, TOKEN
+
+_pin_store: dict[str, dict] = {}
+_pin_lock = threading.Lock()
+
+
+def generate_auth_pin(user_id: int, username: str | None = None, expires_in: int = 600) -> str:
+    """
+    Generates a secure temporary 6-digit one-time PIN code mapping to user credentials.
+    Defaults to 10 minutes (600s) validity.
+    """
+    now = time.time()
+    is_admin = bool(ADMIN_ID and user_id == ADMIN_ID)
+    with _pin_lock:
+        expired = [k for k, v in _pin_store.items() if v["expires_at"] < now]
+        for k in expired:
+            _pin_store.pop(k, None)
+        pin = f"{secrets.randbelow(1_000_000):06d}"
+        while pin in _pin_store:
+            pin = f"{secrets.randbelow(1_000_000):06d}"
+        _pin_store[pin] = {
+            "user_id": user_id,
+            "username": username or "",
+            "is_admin": is_admin,
+            "expires_at": now + expires_in,
+        }
+    return pin
+
+
+def verify_auth_pin(pin: str) -> dict | None:
+    """
+    Verifies and consumes a 6-digit one-time PIN code.
+    Returns dict with user_id, username, is_admin, or None if invalid or expired.
+    """
+    if not pin or not isinstance(pin, str):
+        return None
+    cleaned_pin = pin.strip()
+    now = time.time()
+    with _pin_lock:
+        entry = _pin_store.pop(cleaned_pin, None)
+        if not entry:
+            return None
+        if entry["expires_at"] < now:
+            return None
+        return {
+            "user_id": entry["user_id"],
+            "username": entry["username"],
+            "is_admin": entry["is_admin"],
+        }
 
 
 def _get_auth_secret() -> bytes:
