@@ -1,26 +1,29 @@
-import os
-import re
-import json
-import html
-import time
 import asyncio
+import html
+import io
+import json
+import re
+import time
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+
+from pymongo import UpdateOne
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from config import ADMIN_ID, logger
 from database import (
     codes_col,
-    reminders_col,
-    logs_col,
     group_keys_col,
-    users_col,
-    unlocked_groups_col,
+    logs_col,
     prefix_labels_col,
+    reminders_col,
+    unlocked_groups_col,
+    users_col,
 )
+from services.access import invalidate_group_keys_cache
+from services.tmdb import fetch_tmdb_metadata
 from utils.helpers import extract_file_data
 from utils.sentinel import log_event, notify_admin
-from services.tmdb import fetch_tmdb_metadata, clean_title_for_search
 
 
 def parse_duration(d_str: str) -> float | None:
@@ -236,7 +239,7 @@ async def handle_palette_callback(update: Update, context: ContextTypes.DEFAULT_
     elif action == "stats":
         await get_stats(update, context)
     elif action == "access":
-        await get_access_matrix(update, context) 
+        await get_access_matrix(update, context)
     elif action == "export":
         await export_data(update, context)
     elif action == "alllists":
@@ -247,7 +250,7 @@ async def handle_palette_callback(update: Update, context: ContextTypes.DEFAULT_
         await get_system_logs(update, context)
     elif action == "sync":
         await refresh_metadata(update, context)
-    elif action == "manage": 
+    elif action == "manage":
         context.user_data.clear()
         await manage_db_gui(update, context)
 
@@ -256,24 +259,30 @@ async def handle_palette_callback(update: Update, context: ContextTypes.DEFAULT_
 
 async def get_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID or codes_col is None: return
-    r_c = await reminders_col.count_documents({})
-    c_c = await codes_col.count_documents({})
-    l_c = await logs_col.count_documents({})
-    k_c = await group_keys_col.count_documents({})
-    u_c = await users_col.count_documents({}) if users_col is not None else 0
-    
-    msg = (
-        "📊 **SYSTEM AUDIT REPORT**\n"
-        "───────────────────\n"
-        f"📅 **Total Reminders:** `{r_c:03d}`\n"
-        f"🔑 **Indexed Assets:** `{c_c:03d}`\n"
-        f"🔐 **Locked Prefixes:** `{k_c:03d}`\n"
-        f"📋 **Stored Logs:** `{l_c:03d}`\n"
-        f"👤 **Unique Users:** `{u_c:03d}`\n"
-        "───────────────────\n"
-        "*Auto-cleaning active: Logs purge every 7 days.*"
-    )
-    await update.effective_message.reply_text(msg, parse_mode="Markdown")
+    try:
+        r_task = reminders_col.count_documents({}) if reminders_col is not None else asyncio.sleep(0, result=0)
+        c_task = codes_col.count_documents({}) if codes_col is not None else asyncio.sleep(0, result=0)
+        l_task = logs_col.count_documents({}) if logs_col is not None else asyncio.sleep(0, result=0)
+        k_task = group_keys_col.count_documents({}) if group_keys_col is not None else asyncio.sleep(0, result=0)
+        u_task = users_col.count_documents({}) if users_col is not None else asyncio.sleep(0, result=0)
+
+        r_c, c_c, l_c, k_c, u_c = await asyncio.gather(r_task, c_task, l_task, k_task, u_task)
+
+        msg = (
+            "📊 **SYSTEM AUDIT REPORT**\n"
+            "───────────────────\n"
+            f"📅 **Total Reminders:** `{r_c:03d}`\n"
+            f"🔑 **Indexed Assets:** `{c_c:03d}`\n"
+            f"🔐 **Locked Prefixes:** `{k_c:03d}`\n"
+            f"📋 **Stored Logs:** `{l_c:03d}`\n"
+            f"👤 **Unique Users:** `{u_c:03d}`\n"
+            "───────────────────\n"
+            "*Auto-cleaning active: Logs purge every 7 days.*"
+        )
+        await update.effective_message.reply_text(msg, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Stats Error: {e}")
+        await update.effective_message.reply_text("❌ Failed to retrieve stats.")
 
 
 async def get_access_matrix(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -284,27 +293,34 @@ async def get_access_matrix(update: Update, context: ContextTypes.DEFAULT_TYPE):
         users_access = await cursor.to_list(length=100)
         if not users_access:
             return await update.effective_message.reply_text("👥 No users currently have access to locked media.")
-            
+
+        # Batch fetch all user profiles in a single query to eliminate N+1 latency
+        u_ids = [u.get("user_id") for u in users_access if u.get("user_id")]
+        users_map = {}
+        if users_col is not None and u_ids:
+            async for u_doc in users_col.find({"user_id": {"$in": u_ids}}):
+                users_map[u_doc["user_id"]] = u_doc
+
         report = ["👥 <b>MEDIA ACCESS MATRIX</b>\n"]
         now = time.time()
         for u in users_access:
             u_id = u.get("user_id")
-            u_info = await users_col.find_one({"user_id": u_id}) if users_col is not None else None
+            u_info = users_map.get(u_id)
             uname = f"@{u_info.get('username')}" if u_info and u_info.get('username') else f"User {u_id}"
-            
+
             unlocked = u.get("unlocked_prefixes", [])
             frozen = u.get("frozen_prefixes", [])
             expirations = u.get("prefix_expirations", {})
-            
+
             if not unlocked and not frozen:
                 continue
-                
+
             prefix_statuses = []
             all_prefixes = sorted(list(set(unlocked + frozen)))
             for p_key in all_prefixes:
                 parts = p_key.split('_')
                 display_prefix = parts[-1] if len(parts) > 1 else p_key
-                
+
                 if p_key in frozen:
                     status = "❄️ FROZEN"
                 else:
@@ -320,16 +336,16 @@ async def get_access_matrix(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     else:
                         status = "🟢 ACTIVE (Permanent)"
                 prefix_statuses.append(f"{display_prefix}: {status}")
-                
+
             report.append(f"• <b>{html.escape(uname)}</b> (<code>{u_id}</code>):\n  " + ", ".join(prefix_statuses))
-            
+
         report.append("\n<b>Admin Commands:</b>\n"
                       "• <code>/user grant &lt;USER_ID|@username&gt; &lt;PREFIX|0&gt; [DURATION]</code>\n"
                       "• <code>/user revoke &lt;USER_ID|@username&gt; &lt;PREFIX|0&gt;</code>\n"
                       "• <code>/user freeze &lt;USER_ID|@username&gt; [PREFIX|0] [DURATION]</code>\n"
                       "• <code>/user unfreeze &lt;USER_ID|@username&gt; [PREFIX|0]</code>\n"
                       "• <code>/user ban &lt;USER_ID|@username&gt;</code>")
-        
+
         await update.effective_message.reply_text("\n".join(report), parse_mode="HTML")
     except Exception as e:
         logger.error(f"Access Matrix error: {e}")
@@ -342,7 +358,9 @@ async def resolve_target_user(identifier: str) -> tuple[int | None, str]:
     if identifier.startswith("@"):
         uname = identifier[1:]
         if users_col is not None:
-            doc = await users_col.find_one({"username": {"$regex": f"^{re.escape(uname)}$", "$options": "i"}})
+            doc = await users_col.find_one({"username": uname})
+            if not doc:
+                doc = await users_col.find_one({"username": {"$regex": f"^{re.escape(uname)}$", "$options": "i"}})
             if doc:
                 return doc.get("user_id"), f"@{doc.get('username')}"
         return None, identifier
@@ -391,7 +409,9 @@ async def user_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE
         duration_note = f"expires in {duration_str}" if expires_at else "Permanent"
 
         if target_prefix == "0":
-            cursor = group_keys_col.find({}) if group_keys_col is not None else []
+            if group_keys_col is None:
+                return await update.message.reply_text("ℹ️ Database unavailable.")
+            cursor = group_keys_col.find({})
             keys_to_add = [f"{doc['chat_id']}_{doc['prefix']}" async for doc in cursor]
             if not keys_to_add:
                 return await update.message.reply_text("ℹ️ No locked partitions currently exist.")
@@ -588,12 +608,26 @@ async def get_key_matrix(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor = codes_col.aggregate(pipeline)
         results = await cursor.to_list(length=100)
         if not results: return await update.effective_message.reply_text("🗝️ No indexed groups.")
+
+        # Batch fetch all group keys and prefix labels in 2 queries instead of 2 * len(results)
+        prefixes = [r['_id']['prefix'] for r in results]
+        keys_map = {}
+        if group_keys_col is not None and prefixes:
+            async for k_doc in group_keys_col.find({"prefix": {"$in": prefixes}}):
+                keys_map[(k_doc.get("chat_id"), k_doc.get("prefix"))] = k_doc
+                keys_map[k_doc.get("prefix")] = k_doc
+
+        labels_map = {}
+        if prefix_labels_col is not None and prefixes:
+            async for l_doc in prefix_labels_col.find({"prefix": {"$in": prefixes}}):
+                labels_map[l_doc.get("prefix")] = l_doc
+
         report = ["🗝️ <b>LIVE SECRET KEY MATRIX</b>\n"]
         for r in results:
             prefix, chat_id, count = r['_id']['prefix'], r['_id']['chat_id'], r['count']
-            key_record = await group_keys_col.find_one({"chat_id": chat_id, "prefix": prefix})
+            key_record = keys_map.get((chat_id, prefix)) or keys_map.get(prefix)
             passkey = html.escape(key_record["secret_key"] if key_record else "NO KEY SET")
-            label_doc = await prefix_labels_col.find_one({"prefix": prefix}) if prefix_labels_col is not None else None
+            label_doc = labels_map.get(prefix)
             label_name = html.escape(label_doc.get("name", "Unlabeled")) if label_doc else "Unlabeled"
             report.append(f"• <code>{prefix}</code> - {count:02d} items  =&gt;  <b>{label_name}</b>  &lt;=  <code>{passkey}</code>")
         await update.effective_message.reply_text("\n".join(report), parse_mode="HTML")
@@ -607,16 +641,16 @@ async def get_system_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         cursor = logs_col.find({}).sort("timestamp", -1).limit(20)
         logs = await cursor.to_list(length=20)
-        if not logs: 
+        if not logs:
             return await update.effective_message.reply_text("📋 Logs empty.")
-        
+
         report = ["📋 <b>SYSTEM ACTIVITY LOGS</b>\n"]
-        for l in logs:
-            time_str = l['timestamp'].strftime('%H:%M:%S')
-            user = html.escape(str(l.get('username', 'Unknown')))
-            action = html.escape(str(l.get('action', 'Unknown')))
+        for log_entry in logs:
+            time_str = log_entry['timestamp'].strftime('%H:%M:%S')
+            user = html.escape(str(log_entry.get('username', 'Unknown')))
+            action = html.escape(str(log_entry.get('action', 'Unknown')))
             report.append(f"<code>[{time_str}]</code> {user}: {action}")
-        
+
         await update.effective_message.reply_text("\n".join(report), parse_mode="HTML")
     except Exception as e:
         logger.error(f"Error retrieving logs: {e}")
@@ -625,24 +659,26 @@ async def get_system_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID or reminders_col is None: return
-    cursor = reminders_col.find({})
-    data = await cursor.to_list(length=None)
-    for r in data: r['_id'] = str(r['_id'])
-    file_path = f"backup_{datetime.now().strftime('%Y%m%d')}.json"
     try:
-        with open(file_path, "w") as f: json.dump(data, f, indent=4)
-        with open(file_path, "rb") as f:
-            await update.effective_message.reply_document(document=f, filename=file_path)
-    finally:
-        if os.path.exists(file_path): os.remove(file_path)
+        cursor = reminders_col.find({})
+        data = await cursor.to_list(length=None)
+        for r in data: r['_id'] = str(r['_id'])
+
+        file_bytes = io.BytesIO(json.dumps(data, indent=4).encode('utf-8'))
+        file_name = f"backup_{datetime.now().strftime('%Y%m%d')}.json"
+        file_bytes.name = file_name
+        await update.effective_message.reply_document(document=file_bytes, filename=file_name)
+    except Exception as e:
+        logger.error(f"Export Error: {e}")
+        await update.effective_message.reply_text("❌ Failed to export data.")
 
 
 async def manage_db_gui(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if codes_col is None: return
     pipeline = [{"$project": {"prefix": {"$substr": ["$code", 0, 3]}}}, {"$group": {"_id": "$prefix", "count": {"$sum": 1}}}]
     cursor = codes_col.aggregate(pipeline)
-    prefixes = await cursor.to_list(length=100)
-    if not prefixes: 
+    prefixes = await cursor.to_list(length=90)
+    if not prefixes:
         await update.effective_message.reply_text("Database empty.")
         return
     keyboard = [[InlineKeyboardButton(f"🔥 Wipe {p['_id']} ({p['count']} items)", callback_data=f"pref_wipe_{p['_id']}")] for p in prefixes]
@@ -653,16 +689,16 @@ async def manage_db_gui(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_manage_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if update.effective_user.id != ADMIN_ID: return await query.answer("Unauthorized")
-    
+
     await query.answer()
     prefix = query.data.split('_')[2]
-    
+
     try:
         escaped_prefix = re.escape(prefix)
         count_to_wipe = await codes_col.count_documents({"code": {"$regex": f"^{escaped_prefix}"}})
         res = await codes_col.delete_many({"code": {"$regex": f"^{escaped_prefix}"}})
         await prefix_labels_col.delete_one({"prefix": prefix})
-        
+
         msg = f"🔥 **NUKE COMPLETE**\nPrefix `{prefix}` vaporized.\nAssets Deleted: `{res.deleted_count}/{count_to_wipe}`"
         await query.edit_message_text(msg, parse_mode="Markdown")
         await log_event(ADMIN_ID, "ADMIN", f"Nuke Success: {prefix}")
@@ -749,32 +785,62 @@ async def file_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE
                 curr = exist + 1
                 status_msg = await update.message.reply_text(f"🔄 Probing <code>{prefix}</code> range from {start_id} to {end_id}...", parse_mode="HTML")
                 indexed_count = 0
+                bulk_ops = []
+                from telegram.error import RetryAfter
                 for m_id in range(start_id, end_id + 1):
+                    retry_limit = 2
+                    while retry_limit >= 0:
+                        try:
+                            probe = await context.bot.forward_message(chat_id=ADMIN_ID, from_chat_id=update.effective_chat.id, message_id=m_id)
+                            f_type, f_id, caption, f_name = extract_file_data(probe)
+                            try:
+                                await probe.delete()
+                            except Exception:
+                                pass
+                            if f_id:
+                                code_to_save = f"{prefix}{curr:03d}"
+                                bulk_ops.append(
+                                    UpdateOne(
+                                        {"code": code_to_save},
+                                        {"$set": {
+                                            "chat_id": update.effective_chat.id,
+                                            "message_id": m_id,
+                                            "file_type": f_type,
+                                            "file_id": f_id,
+                                            "caption": caption or "",
+                                            "file_name": f_name or ""
+                                        }},
+                                        upsert=True
+                                    )
+                                )
+                                indexed_count += 1
+                                curr += 1
+                                if len(bulk_ops) >= 50:
+                                    try:
+                                        await codes_col.bulk_write(bulk_ops, ordered=False)
+                                    except Exception as bwe:
+                                        logger.warning(f"Bulk write note: {bwe}")
+                                    bulk_ops = []
+                            break
+                        except Exception as probe_err:
+                            if isinstance(probe_err, RetryAfter):
+                                wait_time = min(probe_err.retry_after, 5)
+                                await asyncio.sleep(wait_time)
+                                retry_limit -= 1
+                                continue
+                            break
+                    await asyncio.sleep(0.05)
+
+                if bulk_ops:
                     try:
-                        probe = await context.bot.forward_message(chat_id=ADMIN_ID, from_chat_id=update.effective_chat.id, message_id=m_id)
-                        f_type, f_id, caption, f_name = extract_file_data(probe)
-                        await probe.delete()
-                        if f_id:
-                            code_to_save = f"{prefix}{curr:03d}"
-                            await codes_col.update_one(
-                                {"code": code_to_save},
-                                {"$set": {
-                                    "chat_id": update.effective_chat.id,
-                                    "message_id": m_id,
-                                    "file_type": f_type,
-                                    "file_id": f_id,
-                                    "caption": caption or "",
-                                    "file_name": f_name or ""
-                                }},
-                                upsert=True
-                            )
-                            indexed_count += 1
-                            curr += 1
-                    except Exception:
-                        continue
+                        await codes_col.bulk_write(bulk_ops, ordered=False)
+                    except Exception as bwe:
+                        logger.warning(f"Bulk write flush note: {bwe}")
+
                 await status_msg.edit_text(f"✅ <b>Bulk Indexing Complete!</b> Indexed <code>{indexed_count}</code> items for <code>{prefix}</code>.", parse_mode="HTML")
                 await log_event(ADMIN_ID, "ADMIN", f"Bulk save: {prefix} ({indexed_count} items)")
                 await notify_admin(context, f"📦 Bulk save success for <code>{prefix}</code> ({indexed_count} items).")
+
             except Exception as e:
                 await update.message.reply_text(f"❌ Error during bulk save: {e}", parse_mode="HTML")
                 await notify_admin(context, f"🔴 Bulk save failure: {e}")
@@ -830,6 +896,7 @@ async def file_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE
             if target_prefix == "0":
                 res = await group_keys_col.update_many({"secret_key": old_pass}, {"$set": {"secret_key": new_pass}})
                 if res.modified_count > 0:
+                    invalidate_group_keys_cache()
                     await update.message.reply_text(f"🔑 <b>Password Updated!</b> Rotated passkey for <b>{res.modified_count}</b> partition(s).", parse_mode="HTML")
                     await log_event(ADMIN_ID, "ADMIN", f"Rotated passkey for {res.modified_count} partitions")
                     await notify_admin(context, f"🔑 Rotated passkey for <b>{res.modified_count}</b> partitions.")
@@ -844,6 +911,7 @@ async def file_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE
                     return await update.message.reply_text(f"❌ Incorrect OLD_PASSWORD for partition <code>{pfx}</code>.", parse_mode="HTML")
 
                 await group_keys_col.update_one({"prefix": pfx}, {"$set": {"secret_key": new_pass}})
+                invalidate_group_keys_cache(pfx)
                 await update.message.reply_text(f"🔑 <b>Password Changed!</b> Partition <code>{pfx}</code> passkey updated successfully.", parse_mode="HTML")
                 await log_event(ADMIN_ID, "ADMIN", f"Changed key for {pfx}")
                 await notify_admin(context, f"🔑 Passkey for partition <code>{pfx}</code> updated.")
@@ -872,12 +940,17 @@ async def file_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE
                 if not unlocked_prefixes:
                     return await update.message.reply_text("ℹ️ All partitions are already locked.", parse_mode="HTML")
 
-                for pfx in unlocked_prefixes:
-                    await group_keys_col.update_one(
-                        {"chat_id": update.effective_chat.id, "prefix": pfx},
-                        {"$set": {"secret_key": password}},
-                        upsert=True
-                    )
+                if group_keys_col is not None and unlocked_prefixes:
+                    bulk_lock_ops = [
+                        UpdateOne(
+                            {"chat_id": update.effective_chat.id, "prefix": pfx},
+                            {"$set": {"secret_key": password}},
+                            upsert=True
+                        )
+                        for pfx in unlocked_prefixes
+                    ]
+                    await group_keys_col.bulk_write(bulk_lock_ops, ordered=False)
+                    invalidate_group_keys_cache()
 
                 pfx_list_str = ", ".join(f"<code>{p}</code>" for p in unlocked_prefixes)
                 await update.message.reply_text(
@@ -892,6 +965,7 @@ async def file_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE
                 pfx = target_prefix[:3]
                 if group_keys_col is not None:
                     await group_keys_col.update_one({"chat_id": update.effective_chat.id, "prefix": pfx}, {"$set": {"secret_key": password}}, upsert=True)
+                    invalidate_group_keys_cache(pfx)
                 await update.message.reply_text(f"🔒 Partition <code>{pfx}</code> locked with passkey!", parse_mode="HTML")
                 await log_event(ADMIN_ID, "ADMIN", f"Locked prefix: {pfx}")
                 await notify_admin(context, f"🔒 Access key set for <code>{pfx}</code>.")
@@ -903,6 +977,7 @@ async def file_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE
         if group_keys_col is not None:
             res = await group_keys_col.delete_many({"prefix": prefix})
             if res.deleted_count > 0:
+                invalidate_group_keys_cache(prefix)
                 await update.message.reply_text(f"🔓 <b>Partition Removed!</b> Prefix <code>{prefix}</code> is now completely unlocked.", parse_mode="HTML")
                 await log_event(ADMIN_ID, "ADMIN", f"Unset Key: {prefix}")
                 await notify_admin(context, f"🔓 Admin removed password partition from <code>{prefix}</code>.")
@@ -922,21 +997,30 @@ async def file_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE
             escaped_old = re.escape(old_prefix)
             cursor = codes_col.find({"code": {"$regex": f"^{escaped_old}"}})
             count = 0
+            mv_operations = []
             async for record in cursor:
                 old_code = record["code"]
                 suffix = old_code[3:]
                 new_code = f"{new_prefix}{suffix}"
-                await codes_col.update_one({"_id": record["_id"]}, {"$set": {"code": new_code}})
+                mv_operations.append(UpdateOne({"_id": record["_id"]}, {"$set": {"code": new_code}}))
                 count += 1
+                if len(mv_operations) >= 500:
+                    await codes_col.bulk_write(mv_operations, ordered=False)
+                    mv_operations = []
+
+            if mv_operations:
+                await codes_col.bulk_write(mv_operations, ordered=False)
 
             if group_keys_col is not None:
                 await group_keys_col.update_many({"prefix": old_prefix}, {"$set": {"prefix": new_prefix}})
+                invalidate_group_keys_cache()
             if prefix_labels_col is not None:
                 await prefix_labels_col.update_many({"prefix": old_prefix}, {"$set": {"prefix": new_prefix}})
 
             await status.edit_text(f"✅ <b>Migration Complete!</b>\nMoved <code>{count}</code> items from <code>{old_prefix}</code> to <code>{new_prefix}</code>.", parse_mode="HTML")
             await log_event(ADMIN_ID, "ADMIN", f"Rename Prefix: {old_prefix} -> {new_prefix} ({count} items)")
             await notify_admin(context, f"🔄 Migrated <code>{old_prefix}</code> to <code>{new_prefix}</code> ({count} items).")
+
         except Exception as e:
             logger.error(f"Rename error: {e}")
             await status.edit_text(f"❌ <b>Migration Failed:</b> {e}", parse_mode="HTML")
@@ -1208,6 +1292,7 @@ async def refresh_metadata(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query_filter = {"$or": [{"file_id": {"$exists": False}}, {"file_id": None}, {"file_id": ""}, {"file_name": {"$exists": False}}]}
     total_to_sync = await codes_col.count_documents(query_filter)
     file_sync_count = 0
+    last_edit_time = time.time()
 
     if total_to_sync > 0:
         cursor = codes_col.find(query_filter)
@@ -1219,8 +1304,13 @@ async def refresh_metadata(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if f_id:
                     await codes_col.update_one({"_id": record["_id"]}, {"$set": {"file_type": f_type, "file_id": f_id, "caption": caption or "", "file_name": f_name or ""}})
                     file_sync_count += 1
-                if (file_sync_count % 5 == 0) or file_sync_count == total_to_sync:
-                    await status_msg.edit_text(f"🔄 <b>Syncing Files...</b>\n<code>{file_sync_count}/{total_to_sync}</code> assets updated.", parse_mode="HTML")
+                now_t = time.time()
+                if (now_t - last_edit_time >= 2.5) or file_sync_count == total_to_sync:
+                    try:
+                        await status_msg.edit_text(f"🔄 <b>Syncing Files...</b>\n<code>{file_sync_count}/{total_to_sync}</code> assets updated.", parse_mode="HTML")
+                        last_edit_time = now_t
+                    except Exception:
+                        pass
                 await asyncio.sleep(0.5)
             except Exception as e:
                 logger.warning(f"File probe failed for {record.get('code')}: {e}")
@@ -1249,14 +1339,20 @@ async def refresh_metadata(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await prefix_labels_col.update_one({"_id": label_doc["_id"]}, {"$set": {"tmdb": tmdb_info}})
                         tmdb_sync_count += 1
 
-                if (processed % 3 == 0) or processed == total_labels:
-                    await status_msg.edit_text(
-                        f"🔄 <b>Refreshing Linked TMDB Metadata...</b>\n"
-                        f"<code>{processed}/{total_labels}</code> titles checked.\n"
-                        f"Updated: <code>{tmdb_sync_count}</code>",
-                        parse_mode="HTML"
-                    )
+                now_t = time.time()
+                if (now_t - last_edit_time >= 2.5) or processed == total_labels:
+                    try:
+                        await status_msg.edit_text(
+                            f"🔄 <b>Refreshing Linked TMDB Metadata...</b>\n"
+                            f"<code>{processed}/{total_labels}</code> titles checked.\n"
+                            f"Updated: <code>{tmdb_sync_count}</code>",
+                            parse_mode="HTML"
+                        )
+                        last_edit_time = now_t
+                    except Exception:
+                        pass
                 await asyncio.sleep(0.25)
+
 
     summary_lines = [
         "✅ <b>Sync Finalized!</b>",
@@ -1273,34 +1369,39 @@ async def weekly_backup_job(context: ContextTypes.DEFAULT_TYPE):
     """Automated recurring job that exports database backup and sends directly to Admin on Telegram."""
     if not ADMIN_ID: return
     try:
+        r_t = reminders_col.find({}).to_list(length=None) if reminders_col is not None else asyncio.sleep(0, result=[])
+        c_t = codes_col.find({}).to_list(length=None) if codes_col is not None else asyncio.sleep(0, result=[])
+        p_t = prefix_labels_col.find({}).to_list(length=None) if prefix_labels_col is not None else asyncio.sleep(0, result=[])
+        g_t = group_keys_col.find({}).to_list(length=None) if group_keys_col is not None else asyncio.sleep(0, result=[])
+        u_t = unlocked_groups_col.find({}).to_list(length=None) if unlocked_groups_col is not None else asyncio.sleep(0, result=[])
+
+        rems, codes, labels, keys, unlocked = await asyncio.gather(r_t, c_t, p_t, g_t, u_t)
         backup_data = {
             "created_at": datetime.now().isoformat(),
-            "reminders": await reminders_col.find({}).to_list(length=None) if reminders_col is not None else [],
-            "codes": await codes_col.find({}).to_list(length=None) if codes_col is not None else [],
-            "prefix_labels": await prefix_labels_col.find({}).to_list(length=None) if prefix_labels_col is not None else [],
-            "group_keys": await group_keys_col.find({}).to_list(length=None) if group_keys_col is not None else [],
-            "unlocked_groups": await unlocked_groups_col.find({}).to_list(length=None) if unlocked_groups_col is not None else [],
+            "reminders": rems,
+            "codes": codes,
+            "prefix_labels": labels,
+            "group_keys": keys,
+            "unlocked_groups": unlocked,
         }
         for col_items in backup_data.values():
             if isinstance(col_items, list):
                 for item in col_items:
                     if isinstance(item, dict) and "_id" in item:
                         item["_id"] = str(item["_id"])
-                        
-        file_path = f"auto_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        with open(file_path, "w") as f:
-            json.dump(backup_data, f, indent=2)
-            
-        with open(file_path, "rb") as f:
-            await context.bot.send_document(
-                chat_id=ADMIN_ID,
-                document=f,
-                filename=file_path,
-                caption=f"📦 **Automated Weekly Backup**\n📅 `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`\nAssets: `{len(backup_data['codes'])}` | Reminders: `{len(backup_data['reminders'])}`",
-                parse_mode="Markdown"
-            )
-        if os.path.exists(file_path):
-            os.remove(file_path)
+
+        file_name = f"auto_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        file_bytes = io.BytesIO(json.dumps(backup_data, indent=2).encode('utf-8'))
+        file_bytes.name = file_name
+
+        await context.bot.send_document(
+            chat_id=ADMIN_ID,
+            document=file_bytes,
+            filename=file_name,
+            caption=f"📦 **Automated Weekly Backup**\n📅 `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`\nAssets: `{len(codes)}` | Reminders: `{len(rems)}`",
+            parse_mode="Markdown"
+        )
         logger.info("Weekly automated database backup delivered to admin.")
     except Exception as e:
         logger.error(f"Weekly automated backup failed: {e}")
+

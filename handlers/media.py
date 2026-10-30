@@ -1,46 +1,55 @@
+import asyncio
 import re
 import uuid
-import asyncio
+
 from telegram import (
-    Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     InlineQueryResultArticle,
-    InputTextMessageContent,
-    InlineQueryResultCachedVideo,
-    InlineQueryResultCachedDocument,
-    InlineQueryResultCachedPhoto,
     InlineQueryResultCachedAudio,
-    InlineQueryResultCachedVoice,
+    InlineQueryResultCachedDocument,
     InlineQueryResultCachedMpeg4Gif,
+    InlineQueryResultCachedPhoto,
+    InlineQueryResultCachedVideo,
+    InlineQueryResultCachedVoice,
+    InputTextMessageContent,
+    Update,
 )
 from telegram.ext import ContextTypes
 
 from config import ADMIN_ID, logger
-from database import codes_col, group_keys_col, unlocked_groups_col, prefix_labels_col
-from utils.helpers import delete_msg_callback
-from utils.sentinel import log_event, notify_admin
-from utils.rate_limiter import is_rate_limited
+from database import codes_col, prefix_labels_col, unlocked_groups_col
 from services.access import (
     check_access_gate,
+    get_group_gate,
     is_locked_out,
+    is_user_banned,
     record_failed_attempt,
     reset_failed_attempts,
 )
 from services.ascii_art import ascii_command_handler
-from services.tmdb import fetch_tmdb_metadata
+from utils.helpers import delete_msg_callback
+from utils.rate_limiter import is_rate_limited
+from utils.sentinel import log_event, notify_admin
 
 
 async def browse_library(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user and user.id != ADMIN_ID and await is_user_banned(user.id):
+        msg = "⛔ **Access Denied**: Your account is restricted from accessing media."
+        if update.callback_query:
+            return await update.callback_query.answer("Account restricted.", show_alert=True)
+        return await update.message.reply_text(msg, parse_mode="Markdown")
+
     keyboard = [
-        [InlineKeyboardButton("📺 Series", callback_data="lib_cat_series"), 
+        [InlineKeyboardButton("📺 Series", callback_data="lib_cat_series"),
          InlineKeyboardButton("🎬 Movies", callback_data="lib_cat_movie")],
         [InlineKeyboardButton("🌐 All Titles (Unified Library)", callback_data="lib_cat_all")]
     ]
     text = "📂 **CONTENT LIBRARY**\nSelect browsing mode:"
-    if update.callback_query: 
+    if update.callback_query:
         await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-    else: 
+    else:
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 
@@ -72,12 +81,15 @@ async def show_filtered_library_items(update: Update, context: ContextTypes.DEFA
     if cat in ["series", "movie"]:
         query_filter["category"] = cat
 
-    cursor = prefix_labels_col.find(query_filter).sort("name", 1)
+    cursor = prefix_labels_col.find(
+        query_filter,
+        {"name": 1, "category": 1, "tmdb.rating": 1, "prefix": 1}
+    ).sort("name", 1)
     prefixes = await cursor.to_list(length=100)
     if not prefixes:
         cat_name = "titles" if cat == "all" else cat
         return await query.answer(f"No {cat_name} starting with '{letter}'.", show_alert=True)
-    
+
     keyboard = []
     for p in prefixes:
         p_cat = p.get("category", "movie")
@@ -85,7 +97,7 @@ async def show_filtered_library_items(update: Update, context: ContextTypes.DEFA
         tmdb = p.get("tmdb", {})
         rating_str = f" ⭐{tmdb['rating']}" if tmdb.get("rating") else ""
         keyboard.append([InlineKeyboardButton(f"{cat_icon} {p['name']}{rating_str}", callback_data=f"lib_pick_{p_cat}_{p['prefix']}")])
-        
+
     keyboard.append([InlineKeyboardButton("🔙 Back to Alphabet", callback_data=f"lib_cat_{cat}")])
     cat_label = "ALL TITLES" if cat == "all" else cat.upper()
     await query.edit_message_text(f"📂 **{cat_label} ({letter})**\nSelect a title:ㅤㅤㅤㅤ", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
@@ -140,7 +152,10 @@ async def handle_library_pick(update: Update, context: ContextTypes.DEFAULT_TYPE
     card_text = banner_prefix + "\n".join(header_parts)
 
     if cat == "movie":
-        cursor = codes_col.find({"code": {"$regex": f"^{escaped_prefix}"}}).sort("code", 1)
+        cursor = codes_col.find(
+            {"code": {"$regex": f"^{escaped_prefix}"}},
+            {"code": 1, "file_name": 1, "caption": 1}
+        ).sort("code", 1)
         items = await cursor.to_list(length=100)
         keyboard = []
         for item in items:
@@ -156,12 +171,17 @@ async def handle_library_pick(update: Update, context: ContextTypes.DEFAULT_TYPE
             keyboard.append([InlineKeyboardButton("🔙 Back to Library", callback_data=f"lib_alpha_{cat}_{first_letter}")])
             await query.edit_message_text(card_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         else:
-            cursor = codes_col.find({"code": {"$regex": f"^{escaped_prefix}"}}).sort("code", 1)
+            cursor = codes_col.find(
+                {"code": {"$regex": f"^{escaped_prefix}"}},
+                {"code": 1}
+            ).sort("code", 1)
             items = await cursor.to_list(length=100)
             keyboard, row = [], []
             for i, item in enumerate(items):
                 row.append(InlineKeyboardButton(f"Ep {i+1}", callback_data=f"lib_dl_{item['code']}_one"))
-                if len(row) == 4: keyboard.append(row); row = []
+                if len(row) == 4:
+                    keyboard.append(row)
+                    row = []
             if row: keyboard.append(row)
             keyboard.append([InlineKeyboardButton("🔙 Back to Library", callback_data=f"lib_alpha_{cat}_{first_letter}")])
             await query.edit_message_text(card_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
@@ -191,28 +211,33 @@ async def handle_season_pick(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     start, end = season_obj['start'], season_obj['end']
     target_codes = [f"{prefix}{i:03d}" for i in range(start, end + 1)]
-    cursor = codes_col.find({"code": {"$in": target_codes}}).sort("code", 1)
+    cursor = codes_col.find(
+        {"code": {"$in": target_codes}},
+        {"code": 1}
+    ).sort("code", 1)
     items = await cursor.to_list(length=100)
     keyboard, row = [], []
     for i, item in enumerate(items):
         row.append(InlineKeyboardButton(f"Ep {i+1}", callback_data=f"lib_dl_{item['code']}_one"))
-        if len(row) == 4: keyboard.append(row); row = []
+        if len(row) == 4:
+            keyboard.append(row)
+            row = []
     if row: keyboard.append(row)
     keyboard.append([InlineKeyboardButton("🔙 Back to Seasons", callback_data=f"lib_pick_series_{prefix}")])
     await query.edit_message_text(season_header, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 
 
-async def execute_file_delivery(chat_id, record, context, user, send_alert=True):
+async def execute_file_delivery(chat_id, record, context, user, send_alert=True, log_fetch=True, check_next=True):
     """Delivers file to user and appends Next Episode button if part of an episodic series."""
     try:
         f_type, f_id, caption = record.get("file_type"), record.get("file_id"), record.get("caption", "")
         code = record.get("code", "")
         prefix = code[:3].upper() if len(code) >= 3 else ""
 
-        # Build One-Click Next Episode button if next code exists in series
+        # Build One-Click Next Episode button only if enabled and next code exists in series
         reply_markup = None
-        if prefix and len(code) > 3 and code[3:].isdigit():
+        if check_next and prefix and len(code) > 3 and code[3:].isdigit():
             curr_num = int(code[3:])
             next_code = f"{prefix}{curr_num + 1:03d}"
             next_record = await codes_col.find_one({"code": next_code})
@@ -230,14 +255,16 @@ async def execute_file_delivery(chat_id, record, context, user, send_alert=True)
             elif f_type == "animation": msg = await context.bot.send_animation(chat_id, animation=f_id, caption=caption, reply_markup=reply_markup)
             else: msg = await context.bot.copy_message(chat_id, from_chat_id=record["chat_id"], message_id=record["message_id"], reply_markup=reply_markup)
         else: msg = await context.bot.copy_message(chat_id, from_chat_id=record["chat_id"], message_id=record["message_id"], reply_markup=reply_markup)
-        
-        await log_event(user.id, user.username, f"Fetched: {record['code']}")
-        await notify_admin(context, f"📦 User `{user.id}` fetched `{record['code']}`.")
-        
-        if send_alert:
+
+        if log_fetch:
+            await asyncio.gather(
+                log_event(user.id, user.username, f"Fetched: {record['code']}"),
+                notify_admin(context, f"📦 User `{user.id}` fetched `{record['code']}`.")
+            )
+
+        if send_alert and msg:
             warn = await context.bot.send_message(chat_id, "⚠️File(s) are *EPHEMERAL*⚠️\n\nFile will be deleted in 3 minutes due to copyright.\n\nPlease forward it to your *Saved Messages* to download", parse_mode="Markdown")
-            context.job_queue.run_once(delete_msg_callback, 180, data={"chat_id": chat_id, "message_id": msg.message_id})
-            context.job_queue.run_once(delete_msg_callback, 180, data={"chat_id": chat_id, "message_id": warn.message_id})
+            context.job_queue.run_once(delete_msg_callback, 180, data={"chat_id": chat_id, "message_ids": [msg.message_id, warn.message_id]})
         return msg
     except Exception as e:
         logger.error(f"Delivery Error: {e}")
@@ -298,9 +325,19 @@ async def handle_library_delivery(update: Update, context: ContextTypes.DEFAULT_
             alert = await context.bot.send_message(chat_id, f"🔒 Prefix '{prefix}' is Locked. Enter Access Key:")
             context.user_data['alert_message_id'] = alert.message_id
             return await query.answer("Key required.", show_alert=True)
-        for r in records:
-            await execute_file_delivery(chat_id, r, context, user, send_alert=True)
+        delivered_ids = []
+        for idx, r in enumerate(records):
+            is_last = (idx == len(records) - 1)
+            m = await execute_file_delivery(chat_id, r, context, user, send_alert=False, log_fetch=False, check_next=is_last)
+            if m: delivered_ids.append(m.message_id)
             await asyncio.sleep(0.15)
+        if delivered_ids:
+            await asyncio.gather(
+                log_event(user.id, user.username, f"Fetched batch: {target} ({len(delivered_ids)} items)"),
+                notify_admin(context, f"📦 User `{user.id}` fetched batch `{target}` ({len(delivered_ids)} items).")
+            )
+            warn = await context.bot.send_message(chat_id, "⚠️File(s) are *EPHEMERAL*⚠️\n\nFile will be deleted in 3 minutes due to copyright.\n\nPlease forward it to your *Saved Messages* to download", parse_mode="Markdown")
+            context.job_queue.run_once(delete_msg_callback, 180, data={"chat_id": chat_id, "message_ids": delivered_ids + [warn.message_id]})
     else:
         record = await codes_col.find_one({"code": target})
         if record:
@@ -331,7 +368,10 @@ async def get_file_command(update: Update, context: ContextTypes.DEFAULT_TYPE, f
     if not args: return await browse_library(update, context)
     user = update.effective_user
     is_admin = (user.id == ADMIN_ID)
-    
+
+    if not is_admin and await is_user_banned(user.id):
+        return await update.message.reply_text("⛔ **Access Denied**: Your account is restricted from retrieving media.", parse_mode="Markdown")
+
     # Rate limit check for regular users
     if not is_admin:
         limited, retry_after = is_rate_limited(user.id, max_hits=10, window_seconds=30)
@@ -362,50 +402,54 @@ async def get_file_command(update: Update, context: ContextTypes.DEFAULT_TYPE, f
             start_num, end_num = int(args[1]), int(args[2])
         except ValueError:
             return await update.message.reply_text("❌ Start and End numbers must be integers.")
-            
+
         if start_num < 1 or end_num < start_num:
             return await update.message.reply_text("❌ Invalid range: START must be <= END and >= 1.")
-            
+
         if (end_num - start_num + 1) > 100:
             return await update.message.reply_text("❌ Range error: Maximum 100 items can be requested at once.")
-            
+
         target_codes = [f"{prefix_arg}{i:03d}" for i in range(start_num, end_num + 1)]
         cursor = codes_col.find({"code": {"$in": target_codes}}).sort("code", 1)
         records = await cursor.to_list(length=100)
         if not records:
             return await update.message.reply_text("❌ No items found in that range.")
-            
+
         if not is_admin:
-            for record in records:
-                authorized, p, p_chat, is_frozen, is_expired = await check_access_gate(user.id, record)
-                if not authorized:
-                    if is_frozen:
-                        return await context.bot.send_message(chat_id, f"❄️ Access to prefix '{p}' has been temporarily frozen by administrator.")
-                    elif is_expired:
-                        return await context.bot.send_message(chat_id, f"⏳ Guest access to prefix '{p}' has expired.")
-                    context.user_data['pending_unlock_group_id'] = p_chat
-                    context.user_data['pending_unlock_prefix'] = p
-                    context.user_data['interrupted_file_codes'] = target_codes
-                    alert = await context.bot.send_message(chat_id, f"🔒 '{p}' Locked. Enter Key (or /cancel):")
-                    context.user_data['alert_message_id'] = alert.message_id
-                    return
-                    
+            # Check gate once for the entire batch since all share the same prefix
+            authorized, p, p_chat, is_frozen, is_expired = await check_access_gate(user.id, records[0])
+            if not authorized:
+                if is_frozen:
+                    return await context.bot.send_message(chat_id, f"❄️ Access to prefix '{p}' has been temporarily frozen by administrator.")
+                elif is_expired:
+                    return await context.bot.send_message(chat_id, f"⏳ Guest access to prefix '{p}' has expired.")
+                context.user_data['pending_unlock_group_id'] = p_chat
+                context.user_data['pending_unlock_prefix'] = p
+                context.user_data['interrupted_file_codes'] = target_codes
+                alert = await context.bot.send_message(chat_id, f"🔒 '{p}' Locked. Enter Key (or /cancel):")
+                context.user_data['alert_message_id'] = alert.message_id
+                return
+
         delivered_ids = []
-        for record in records:
-            msg = await execute_file_delivery(chat_id, record, context, user, send_alert=False)
+        for idx, record in enumerate(records):
+            is_last = (idx == len(records) - 1)
+            msg = await execute_file_delivery(chat_id, record, context, user, send_alert=False, log_fetch=False, check_next=is_last)
             if msg: delivered_ids.append(msg.message_id)
             await asyncio.sleep(0.15)
         if delivered_ids:
+            await asyncio.gather(
+                log_event(user.id, user.username, f"Fetched batch: {prefix_arg} {start_num}-{end_num} ({len(delivered_ids)} items)"),
+                notify_admin(context, f"📦 User `{user.id}` fetched batch `{prefix_arg}` {start_num}-{end_num} ({len(delivered_ids)} items).")
+            )
             warn = await context.bot.send_message(chat_id, "⚠️File(s) are *EPHEMERAL*⚠️\n\nFile will be deleted in 3 minutes due to copyright.\n\nPlease forward it to your *Saved Messages* to download", parse_mode="Markdown")
-            for m_id in delivered_ids: context.job_queue.run_once(delete_msg_callback, 180, data={"chat_id": chat_id, "message_id": m_id})
-            context.job_queue.run_once(delete_msg_callback, 180, data={"chat_id": chat_id, "message_id": warn.message_id})
+            context.job_queue.run_once(delete_msg_callback, 180, data={"chat_id": chat_id, "message_ids": delivered_ids + [warn.message_id]})
 
 
 async def core_routing_manager(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text or codes_col is None: return
     user, chat_id, text = update.effective_user, update.effective_chat.id, update.message.text.strip()
     is_admin = (user.id == ADMIN_ID)
-    
+
     # Check pending passkey prompt
     pending_chat = context.user_data.get('pending_unlock_group_id')
     pending_prefix = context.user_data.get('pending_unlock_prefix')
@@ -428,8 +472,8 @@ async def core_routing_manager(update: Update, context: ContextTypes.DEFAULT_TYP
 
         try: await update.message.delete()
         except: pass
-        
-        gate = await group_keys_col.find_one({"chat_id": pending_chat, "prefix": pending_prefix})
+
+        gate = await get_group_gate(pending_chat, pending_prefix)
         if gate and text == gate.get("secret_key"):
             reset_failed_attempts(user.id)
             await unlocked_groups_col.update_one({"user_id": user.id}, {"$addToSet": {"unlocked_prefixes": f"{pending_chat}_{pending_prefix}"}}, upsert=True)
@@ -441,16 +485,21 @@ async def core_routing_manager(update: Update, context: ContextTypes.DEFAULT_TYP
             context.user_data.pop('pending_unlock_group_id', None)
             context.user_data.pop('pending_unlock_prefix', None)
             if codes:
+                records = await codes_col.find({"code": {"$in": codes}}).sort("code", 1).to_list(length=100)
                 delivered_ids = []
-                cursor = codes_col.find({"code": {"$in": codes}}).sort("code", 1)
-                async for record in cursor:
-                    m = await execute_file_delivery(chat_id, record, context, user, send_alert=False)
+                for idx, record in enumerate(records):
+                    is_last = (idx == len(records) - 1)
+                    m = await execute_file_delivery(chat_id, record, context, user, send_alert=False, log_fetch=False, check_next=is_last)
                     if m: delivered_ids.append(m.message_id)
                     await asyncio.sleep(0.15)
                 if delivered_ids:
+                    await asyncio.gather(
+                        log_event(user.id, user.username, f"Fetched unlocked batch: {len(delivered_ids)} items"),
+                        notify_admin(context, f"📦 User `{user.id}` fetched unlocked batch ({len(delivered_ids)} items).")
+                    )
                     warn = await context.bot.send_message(chat_id, "⚠️File(s) are *EPHEMERAL*⚠️\n\nFile will be deleted in 3 minutes due to copyright.\n\nPlease forward it to your *Saved Messages* to download", parse_mode="Markdown")
-                    for m_id in delivered_ids: context.job_queue.run_once(delete_msg_callback, 180, data={"chat_id": chat_id, "message_id": m_id})
-                    context.job_queue.run_once(delete_msg_callback, 180, data={"chat_id": chat_id, "message_id": warn.message_id})
+                    context.job_queue.run_once(delete_msg_callback, 180, data={"chat_id": chat_id, "message_ids": delivered_ids + [warn.message_id]})
+
         else:
             fails, just_locked = record_failed_attempt(user.id)
             if just_locked:
@@ -483,9 +532,10 @@ async def core_routing_manager(update: Update, context: ContextTypes.DEFAULT_TYP
     escaped_query = re.escape(text)
 
     # 1. Search Prefix Titles
-    matched_labels = await prefix_labels_col.find({
-        "name": {"$regex": escaped_query, "$options": "i"}
-    }).limit(6).to_list(length=6)
+    matched_labels = await prefix_labels_col.find(
+        {"name": {"$regex": escaped_query, "$options": "i"}},
+        {"prefix": 1, "name": 1, "category": 1, "tmdb": 1}
+    ).limit(6).to_list(length=6)
 
     if matched_labels:
         buttons = []
@@ -505,12 +555,15 @@ async def core_routing_manager(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
     # 2. Search Asset File Names and Captions
-    matched_files = await codes_col.find({
-        "$or": [
-            {"caption": {"$regex": escaped_query, "$options": "i"}},
-            {"file_name": {"$regex": escaped_query, "$options": "i"}}
-        ]
-    }).limit(6).to_list(length=6)
+    matched_files = await codes_col.find(
+        {
+            "$or": [
+                {"caption": {"$regex": escaped_query, "$options": "i"}},
+                {"file_name": {"$regex": escaped_query, "$options": "i"}}
+            ]
+        },
+        {"code": 1, "file_name": 1, "caption": 1}
+    ).limit(6).to_list(length=6)
 
     if matched_files:
         buttons = []
@@ -531,19 +584,21 @@ async def core_routing_manager(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def inline_query_manager(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.inline_query.query.strip().upper()
-    if not query.startswith("/GET "): return await update.inline_query.answer([], cache_time=0)
+    if not query.startswith("/GET "): return await update.inline_query.answer([], cache_time=15)
     parts = query.split()
-    if len(parts) < 2: return await update.inline_query.answer([], cache_time=0)
+    if len(parts) < 2: return await update.inline_query.answer([], cache_time=15)
     user_id = update.effective_user.id
+    if user_id != ADMIN_ID and await is_user_banned(user_id):
+        return await update.inline_query.answer([], cache_time=15)
     results = []
     if len(parts) == 2:
         code = parts[1]
         record = await codes_col.find_one({"code": code})
-        if not record: return await update.inline_query.answer([], cache_time=0)
+        if not record: return await update.inline_query.answer([], cache_time=15)
         authorized, prefix, p_chat_id, is_frozen, is_expired = await check_access_gate(user_id, record)
         if not authorized:
             title = "❄️ Frozen" if is_frozen else ("⏳ Expired" if is_expired else "🔒 Locked")
-            return await update.inline_query.answer([InlineQueryResultArticle(id=str(uuid.uuid4()), title=title, input_message_content=InputTextMessageContent(f"/get {code}"))], cache_time=0)
+            return await update.inline_query.answer([InlineQueryResultArticle(id=str(uuid.uuid4()), title=title, input_message_content=InputTextMessageContent(f"/get {code}"))], cache_time=15)
         f_type, f_id, caption = record.get("file_type"), record.get("file_id"), record.get("caption", "")
         uid = str(uuid.uuid4())
         if f_id:
@@ -560,5 +615,7 @@ async def inline_query_manager(update: Update, context: ContextTypes.DEFAULT_TYP
             s_num, e_num = int(start), int(end)
             count = e_num - s_num + 1
             if count > 0: results.append(InlineQueryResultArticle(id=str(uuid.uuid4()), title=f"📦 Batch: {count} files", input_message_content=InputTextMessageContent(f"/get {prefix} {start} {end}")))
-        except: pass
-    await update.inline_query.answer(results, cache_time=0, is_personal=True)
+        except (ValueError, TypeError):
+            pass
+    await update.inline_query.answer(results, cache_time=15, is_personal=True)
+

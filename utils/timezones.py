@@ -1,10 +1,11 @@
-from timezonefinder import TimezoneFinder
 from config import logger
 
 logger.info("Initializing TimezoneFinder...")
 try:
+    from timezonefinder import TimezoneFinder
     tf = TimezoneFinder()
     logger.info("TimezoneFinder initialized.")
 except Exception as e:
-    logger.error(f"Failed to initialize TimezoneFinder: {e}")
+    logger.warning(f"TimezoneFinder not available, falling back to default timezone: {e}")
     tf = None
+

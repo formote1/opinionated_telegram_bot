@@ -1,55 +1,98 @@
 import asyncio
-from datetime import datetime, timezone
+import weakref
+from datetime import datetime, timedelta, timezone
+
 from telegram.ext import (
     ApplicationBuilder,
-    CommandHandler,
     CallbackQueryHandler,
-    MessageHandler,
+    CommandHandler,
     InlineQueryHandler,
+    JobQueue,
+    MessageHandler,
     filters,
 )
+from telegram.request import HTTPXRequest
 
-from config import TOKEN, MONGO_URI, RENDER_URL, PORT, logger
-from database import logs_col, users_col, reminders_col
-from server import init_server, start_server_daemon
+# Python 3.14 compatibility: Application lacks __weakref__ slot; provide safe fallback in JobQueue
+_orig_set_application = JobQueue.set_application
+
+def _compat_set_application(self, application):
+    try:
+        self._application = weakref.ref(application)
+    except TypeError:
+        self._application = lambda: application
+    self.scheduler.configure(**self.scheduler_configuration)
+
+JobQueue.set_application = _compat_set_application
+
+from config import MONGO_URI, PORT, RENDER_URL, TOKEN, logger
+from database import (
+    codes_col,
+    group_keys_col,
+    logs_col,
+    prefix_labels_col,
+    reminders_col,
+    unlocked_groups_col,
+    users_col,
+)
+from handlers.admin import (
+    export_data,
+    file_command_router,
+    get_stats,
+    handle_manage_callback,
+    handle_palette_callback,
+    manage_db_gui,
+    media_command_router,
+    user_command_router,
+    weekly_backup_job,
+)
 
 # Modular Handlers
 from handlers.common import start_command
-from handlers.reminders import (
-    get_reminder_conversation_handler,
-    list_reminders,
-    handle_reminder_callback,
-    schedule_reminder_job,
-)
 from handlers.media import (
     browse_library,
+    core_routing_manager,
+    get_file_command,
+    handle_library_delivery,
+    handle_library_pick,
+    handle_next_episode_callback,
+    handle_season_pick,
+    inline_query_manager,
     show_alphabet_selector,
     show_filtered_library_items,
-    handle_library_pick,
-    handle_season_pick,
-    handle_library_delivery,
-    handle_next_episode_callback,
-    get_file_command,
-    core_routing_manager,
-    inline_query_manager,
 )
-from handlers.admin import (
-    handle_palette_callback,
-    get_stats,
-    export_data,
-    manage_db_gui,
-    handle_manage_callback,
-    user_command_router,
-    file_command_router,
-    media_command_router,
-    weekly_backup_job,
+from handlers.reminders import (
+    get_reminder_conversation_handler,
+    handle_reminder_callback,
+    list_reminders,
+    schedule_reminder_job,
 )
+from server import init_server, start_server_daemon
 from services.ascii_art import ascii_command_handler
+from services.tmdb import close_tmdb_client
+
+
+async def post_stop_cleanup(application):
+    """Gracefully releases persistent network connection pools when bot stops."""
+    await close_tmdb_client()
 
 
 def create_application():
     """Assembles all handlers by category and builds the Telegram application."""
-    app = ApplicationBuilder().token(TOKEN).build()
+    request_client = HTTPXRequest(
+        connection_pool_size=20,
+        read_timeout=15.0,
+        write_timeout=15.0,
+        connect_timeout=10.0
+    )
+    app = (
+        ApplicationBuilder()
+        .token(TOKEN)
+        .concurrent_updates(True)
+        .request(request_client)
+        .post_stop(post_stop_cleanup)
+        .build()
+    )
 
     # --- Common & Greeting Handlers ---
     app.add_handler(CommandHandler("start", start_command))
@@ -99,14 +142,31 @@ async def main():
 
     main_loop = asyncio.get_running_loop()
 
-    # Initialize MongoDB collections and indexes
+    # Initialize MongoDB collections and complete index coverage for fast lookups
     try:
         if logs_col is not None:
             await logs_col.create_index("timestamp", expireAfterSeconds=604800)
         if users_col is not None:
             await users_col.create_index("user_id", unique=True)
+            await users_col.create_index("username")
+        if codes_col is not None:
+            await codes_col.create_index("code", unique=True)
+            await codes_col.create_index("file_name")
+            await codes_col.create_index("caption")
+        if prefix_labels_col is not None:
+            await prefix_labels_col.create_index("prefix", unique=True)
+            await prefix_labels_col.create_index("name")
+            await prefix_labels_col.create_index([("category", 1), ("name", 1)])
+        if group_keys_col is not None:
+            await group_keys_col.create_index("prefix")
+            await group_keys_col.create_index([("chat_id", 1), ("prefix", 1)])
+        if unlocked_groups_col is not None:
+            await unlocked_groups_col.create_index("user_id", unique=True)
+        if reminders_col is not None:
+            await reminders_col.create_index([("user_id", 1), ("target_date", 1)])
     except Exception as e:
         logger.warning(f"Index creation warning: {e}")
+
 
     # Build and start Telegram Application
     application = create_application()
@@ -121,7 +181,7 @@ async def main():
     except Exception as e:
         logger.warning(f"Backup job scheduling warning: {e}")
 
-    # Load active reminders and purge past due ones
+    # Load active reminders, rolling over recurring events and purging past-due one-offs
     try:
         if reminders_col is not None:
             cursor = reminders_col.find({})
@@ -130,8 +190,21 @@ async def main():
                 try:
                     t_date = datetime.strptime(r['target_date'], "%Y-%m-%d").date()
                     if t_date < today_utc:
-                        await reminders_col.delete_one({"_id": r['_id']})
-                        continue
+                        rec = r.get("recurrence", "once")
+                        if rec == "once":
+                            await reminders_col.delete_one({"_id": r['_id']})
+                            continue
+                        else:
+                            cat_check = r.get("category", "")
+                            rollover_days = {"daily": 1, "weekly": 7, "monthly": 30, "annually": 365}.get(
+                                rec, 365 if cat_check == "Birthday" else 7
+                            )
+                            new_date = t_date
+                            while new_date < today_utc:
+                                new_date += timedelta(days=rollover_days)
+                            new_target = new_date.strftime("%Y-%m-%d")
+                            await reminders_col.update_one({"_id": r['_id']}, {"$set": {"target_date": new_target, "last_notified": ""}})
+                            r['target_date'] = new_target
                     schedule_reminder_job(application, r)
                 except Exception:
                     schedule_reminder_job(application, r)

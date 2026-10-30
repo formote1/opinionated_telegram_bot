@@ -1,8 +1,9 @@
 from motor.motor_asyncio import AsyncIOMotorClient
+
 from config import MONGO_URI
 
 # --- DATABASE INITIALIZATION ---
-client = AsyncIOMotorClient(MONGO_URI, serverSelectionTimeoutMS=5000) if MONGO_URI else None
+client = AsyncIOMotorClient(MONGO_URI, serverSelectionTimeoutMS=5000, minPoolSize=5, maxPoolSize=50) if MONGO_URI else None
 db = client.telegram_bot if client is not None else None
 
 reminders_col = db.reminders if db is not None else None

@@ -1,9 +1,53 @@
 import re
-import json
+import time
 import urllib.parse
-import urllib.request
-import asyncio
+
+import httpx
+
 from config import TMDB_API_KEY, logger
+
+# Pre-compiled regular expressions for high-performance title cleaning & query extraction
+RE_EXTENSIONS = re.compile(r'\.(mkv|mp4|avi|mov|flv|wmv|ts|m4v)$', re.IGNORECASE)
+RE_DELIMITERS = re.compile(r'[\._\-+]')
+RE_QUALITY_TAGS = re.compile(
+    r'\b(2160p|1080p|720p|480p|4k|uhd|webrip|web-dl|web|hdtv|bluray|brrip|dvdrip|hdrip|x264|x265|hevc|aac|ac3|dts|remux|repack|dual|audio|hindi|eng|sub|season\s*\d+|season|s\d+\s*e\d+|s\d+|episode\s*\d+|ep\s*\d+|e\d+)\b',
+    re.IGNORECASE
+)
+
+RE_BRACKETS = re.compile(r'\[.*?\]|\(.*?\)')
+RE_SPACES = re.compile(r'\s+')
+RE_ID_QUERY = re.compile(r'^(?:tmdb:|id:)?\s*(\d+)$', re.IGNORECASE)
+RE_YEAR = re.compile(r'\b(19\d\d|20\d\d)\b')
+RE_YEAR_STRIP = re.compile(r'[\(\[\{]?\s*\b(19\d\d|20\d\d)\b\s*[\)\]\}]?')
+
+# In-memory TMDB cache: cache_key -> (timestamp, data)
+_tmdb_cache: dict[str, tuple[float, dict | None]] = {}
+TMDB_CACHE_TTL = 86400  # 24 hours for successful metadata
+TMDB_NEGATIVE_CACHE_TTL = 300  # 5 minutes for missing/failed queries
+_last_tmdb_prune = 0.0
+
+# Persistent HTTPX client for HTTP connection pooling & keep-alive reuse
+_http_client: httpx.AsyncClient | None = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(8.0, connect=5.0),
+            limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+            headers={"User-Agent": "OpinionatedTelegramBot/1.0", "Accept": "application/json"}
+        )
+    return _http_client
+
+
+async def close_tmdb_client():
+    """Gracefully shuts down the persistent HTTPX AsyncClient and releases connections."""
+    global _http_client
+    if _http_client is not None and not _http_client.is_closed:
+        await _http_client.aclose()
+        _http_client = None
+
 
 
 TMDB_GENRES = {
@@ -20,21 +64,13 @@ def clean_title_for_search(raw_title: str) -> str:
     """Cleans noisy file names, quality tags, and scene notations into searchable titles."""
     if not raw_title:
         return ""
-    # Strip file extensions
-    cleaned = re.sub(r'\.(mkv|mp4|avi|mov|flv|wmv|ts|m4v)$', '', raw_title, flags=re.IGNORECASE)
-    # Replace dots, underscores, dashes with spaces
-    cleaned = re.sub(r'[\._\-+]', ' ', cleaned)
-    # Remove resolution and quality tags
-    cleaned = re.sub(
-        r'\b(2160p|1080p|720p|480p|4k|uhd|webrip|web-dl|bluray|brrip|dvdrip|hdrip|x264|x265|hevc|aac|ac3|dts|remux|repack|dual|audio|hindi|eng|sub|season|s\d+|e\d+)\b',
-        '',
-        cleaned,
-        flags=re.IGNORECASE
-    )
-    # Remove brackets and parenthesis content
-    cleaned = re.sub(r'\[.*?\]|\(.*?\)', '', cleaned)
-    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    cleaned = RE_EXTENSIONS.sub('', raw_title)
+    cleaned = RE_DELIMITERS.sub(' ', cleaned)
+    cleaned = RE_QUALITY_TAGS.sub('', cleaned)
+    cleaned = RE_BRACKETS.sub('', cleaned)
+    cleaned = RE_SPACES.sub(' ', cleaned).strip()
     return cleaned or raw_title.strip()
+
 
 
 async def fetch_tmdb_metadata(title: str, category: str = "movie") -> dict | None:
@@ -45,26 +81,31 @@ async def fetch_tmdb_metadata(title: str, category: str = "movie") -> dict | Non
     - Year-filtered search (e.g. 'A Silent Voice 2016' or '(2016)')
     - Dual-endpoint fallback (movie <-> tv)
     - Prioritizing official theatrical posters over backdrops
+    - In-memory 24-hour TTL caching for zero latency on repeated queries
     """
     if not TMDB_API_KEY or not title:
         return None
 
-    def _make_request(url: str) -> dict | None:
+    cache_key = f"{category.lower()}:{title.strip().lower()}"
+    if cache_key in _tmdb_cache:
+        ts, cached_val = _tmdb_cache[cache_key]
+        ttl = TMDB_CACHE_TTL if cached_val is not None else TMDB_NEGATIVE_CACHE_TTL
+        if time.time() - ts < ttl:
+            return cached_val
+
+    async def _make_request(url: str) -> dict | None:
         try:
-            headers = {
-                "Accept": "application/json",
-                "User-Agent": "OpinionatedTelegramBot/1.0"
-            }
+            client = _get_http_client()
+            headers = {}
             if len(TMDB_API_KEY) > 40:
                 headers["Authorization"] = f"Bearer {TMDB_API_KEY}"
             else:
                 sep = "&" if "?" in url else "?"
                 url += f"{sep}api_key={TMDB_API_KEY}"
 
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=7) as response:
-                if response.status == 200:
-                    return json.loads(response.read().decode('utf-8'))
+            response = await client.get(url, headers=headers)
+            if response.status_code == 200:
+                return response.json()
         except Exception as e:
             logger.warning(f"TMDB request failed for {url}: {e}")
         return None
@@ -103,28 +144,28 @@ async def fetch_tmdb_metadata(title: str, category: str = "movie") -> dict | Non
             "rating": rating_val
         }
 
-    def _search():
+    async def _search():
         try:
             raw_query = title.strip()
             primary_endpoint = "movie" if category.lower() == "movie" else "tv"
             secondary_endpoint = "tv" if primary_endpoint == "movie" else "movie"
 
             # 1. Direct TMDB ID lookup if query is an ID or prefixed with tmdb: / id:
-            id_match = re.match(r'^(?:tmdb:|id:)?\s*(\d+)$', raw_query, flags=re.IGNORECASE)
+            id_match = RE_ID_QUERY.match(raw_query)
             if id_match:
                 tmdb_id = id_match.group(1)
                 for ep in [primary_endpoint, secondary_endpoint]:
-                    data = _make_request(f"https://api.themoviedb.org/3/{ep}/{tmdb_id}?language=en-US")
+                    data = await _make_request(f"https://api.themoviedb.org/3/{ep}/{tmdb_id}?language=en-US")
                     if data and (data.get("title") or data.get("name")):
                         return _format_item(data, raw_query)
 
             # 2. Extract Year if explicitly present in the query (e.g. 'A Silent Voice 2016' or '(2016)')
-            year_match = re.search(r'\b(19\d\d|20\d\d)\b', raw_query)
+            year_match = RE_YEAR.search(raw_query)
             extracted_year = year_match.group(1) if year_match else None
-            title_without_year = re.sub(r'[\(\[\{]?\s*\b(19\d\d|20\d\d)\b\s*[\)\]\}]?', '', raw_query).strip()
+            title_without_year = RE_YEAR_STRIP.sub('', raw_query).strip()
             cleaned_query = clean_title_for_search(title_without_year)
 
-            def _query_search(ep: str, q: str, yr: str | None = None) -> list:
+            async def _query_search(ep: str, q: str, yr: str | None = None) -> list:
                 if not q:
                     return []
                 encoded_q = urllib.parse.quote(q)
@@ -132,30 +173,35 @@ async def fetch_tmdb_metadata(title: str, category: str = "movie") -> dict | Non
                 if yr:
                     param = "year" if ep == "movie" else "first_air_date_year"
                     url += f"&{param}={yr}"
-                data = _make_request(url)
+                data = await _make_request(url)
                 return data.get("results", []) if data else []
 
-            # Try query permutations
+            # Try query permutations with prioritized deduplication (cleaned_query first)
             results = []
             endpoints = [primary_endpoint, secondary_endpoint]
+            candidates = []
+            for candidate in [cleaned_query, title_without_year, raw_query]:
+                candidate_clean = candidate.strip()
+                if candidate_clean and candidate_clean not in candidates:
+                    candidates.append(candidate_clean)
 
             # Pass A: With Year filter if provided
             if extracted_year:
                 for ep in endpoints:
-                    results = _query_search(ep, title_without_year, extracted_year)
-                    if not results and cleaned_query:
-                        results = _query_search(ep, cleaned_query, extracted_year)
+                    for candidate_q in candidates:
+                        results = await _query_search(ep, candidate_q, extracted_year)
+                        if results:
+                            break
                     if results:
                         break
 
             # Pass B: General search without Year constraint
             if not results:
                 for ep in endpoints:
-                    for candidate_q in [raw_query, title_without_year, cleaned_query]:
-                        if candidate_q:
-                            results = _query_search(ep, candidate_q)
-                            if results:
-                                break
+                    for candidate_q in candidates:
+                        results = await _query_search(ep, candidate_q)
+                        if results:
+                            break
                     if results:
                         break
 
@@ -175,5 +221,19 @@ async def fetch_tmdb_metadata(title: str, category: str = "movie") -> dict | Non
             logger.warning(f"TMDB query search pipeline error for '{title}': {e}")
             return None
 
-    return await asyncio.to_thread(_search)
+    global _last_tmdb_prune
+    result = await _search()
+    now = time.time()
+    _tmdb_cache[cache_key] = (now, result)
+    if len(_tmdb_cache) > 500 and (now - _last_tmdb_prune > 300.0):
+        _last_tmdb_prune = now
+        stale_keys = [
+            k for k, (t, v) in _tmdb_cache.items()
+            if now - t > (TMDB_CACHE_TTL if v is not None else TMDB_NEGATIVE_CACHE_TTL)
+        ]
+        for k in stale_keys:
+            _tmdb_cache.pop(k, None)
+    return result
+
+
 

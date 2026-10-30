@@ -6,3 +6,4 @@ timezonefinder==6.5.0
 pymongo==4.7.2
 pyfiglet
 Pillow
+httpx>=0.27.0
