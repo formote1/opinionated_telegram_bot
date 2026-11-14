@@ -31,7 +31,7 @@ from database import (
 )
 from handlers.admin import parse_duration, resolve_target_user
 from handlers.media import execute_file_delivery
-from handlers.reminders import format_time_left, schedule_reminder_job
+from handlers.reminders import calculate_upcoming_age, format_time_left, schedule_reminder_job
 from services.access import (
     check_access_gate,
     invalidate_group_keys_cache,
@@ -481,6 +481,10 @@ def api_reminders_list():
             doc["days_left"] = days_left
             doc["days_left_text"] = format_time_left(days_left)
             doc["status"] = status
+            doc["birth_date"] = r.get("birth_date")
+            doc["birth_year"] = r.get("birth_year")
+            doc["is_spotlight"] = bool(r.get("is_spotlight", False))
+            doc["age"] = calculate_upcoming_age(r)
             enriched.append(doc)
         return enriched
 
@@ -507,6 +511,10 @@ def api_reminders_create():
     recurrence = str(payload.get('recurrence', 'once')).strip().lower()
     tz_name = str(payload.get('timezone', 'UTC')).strip()
 
+    birth_date = payload.get('birth_date')
+    birth_year = payload.get('birth_year')
+    is_spotlight = bool(payload.get('is_spotlight', False))
+
     if not label:
         return jsonify({"success": False, "error": "Reminder label is required."}), 400
     if len(label) > 120:
@@ -516,6 +524,25 @@ def api_reminders_create():
         t_date = datetime.strptime(target_date, "%Y-%m-%d").date()
     except ValueError:
         return jsonify({"success": False, "error": "Invalid date format. Expected YYYY-MM-DD."}), 400
+
+    if birth_date:
+        birth_date = str(birth_date).strip()
+        try:
+            b_dt = datetime.strptime(birth_date, "%Y-%m-%d").date()
+            if not birth_year:
+                birth_year = b_dt.year
+        except ValueError:
+            return jsonify({"success": False, "error": "Invalid birth date format. Expected YYYY-MM-DD."}), 400
+    else:
+        birth_date = None
+
+    if birth_year is not None and str(birth_year).strip() != "":
+        try:
+            birth_year = int(birth_year)
+        except (ValueError, TypeError):
+            birth_year = None
+    else:
+        birth_year = None
 
     today_utc = datetime.now(timezone.utc).date()
     if recurrence == "once" and t_date < today_utc:
@@ -548,12 +575,17 @@ def api_reminders_create():
         "label": label,
         "category": category or "General",
         "recurrence": recurrence,
+        "birth_date": birth_date,
+        "birth_year": birth_year,
+        "is_spotlight": is_spotlight,
         "last_notified": ""
     }
 
     async def _insert():
         if reminders_col is None:
             return None
+        if is_spotlight:
+            await reminders_col.update_many({"user_id": user_id, "is_spotlight": True}, {"$set": {"is_spotlight": False}})
         res = await reminders_col.insert_one(doc)
         doc['_id'] = res.inserted_id
         if _application is not None:
@@ -564,7 +596,9 @@ def api_reminders_create():
         inserted = run_async(_insert())
         if not inserted:
             return jsonify({"success": False, "error": "Database unavailable."}), 500
-        return jsonify({"success": True, "reminder": serialize_doc(inserted)})
+        out_doc = serialize_doc(inserted)
+        out_doc["age"] = calculate_upcoming_age(inserted)
+        return jsonify({"success": True, "reminder": out_doc})
     except Exception as e:
         logger.error(f"Error creating reminder: {e}")
         return jsonify({"success": False, "error": "Failed to create reminder."}), 500
@@ -589,6 +623,11 @@ def api_reminders_snooze(reminder_id):
         if not rec:
             return "not_found"
 
+        raw_cat = str(rec.get("category", "")).strip()
+        raw_lbl = str(rec.get("label", ""))
+        if raw_cat.lower() == "birthday" or "birthday" in raw_lbl.lower() or "🎂" in raw_lbl:
+            return "cannot_snooze_birthday"
+
         curr_date = datetime.strptime(rec['target_date'], "%Y-%m-%d")
         new_date = (curr_date + timedelta(days=1)).strftime("%Y-%m-%d")
         await reminders_col.update_one({"_id": oid}, {"$set": {"target_date": new_date, "last_notified": ""}})
@@ -604,6 +643,8 @@ def api_reminders_snooze(reminder_id):
             return jsonify({"success": False, "error": "Invalid reminder ID."}), 400
         if result == "not_found":
             return jsonify({"success": False, "error": "Reminder not found."}), 404
+        if result == "cannot_snooze_birthday":
+            return jsonify({"success": False, "error": "Birthday reminders cannot be snoozed."}), 400
         return jsonify({"success": True, "target_date": result})
     except Exception as e:
         logger.error(f"Error snoozing reminder: {e}")
@@ -766,8 +807,42 @@ def api_reminders_update(reminder_id):
         if "timezone" in payload:
             updates["timezone"] = str(payload["timezone"]).strip() or "UTC"
 
+        if "birth_date" in payload:
+            b_val = payload["birth_date"]
+            if b_val:
+                b_str = str(b_val).strip()
+                try:
+                    b_dt = datetime.strptime(b_str, "%Y-%m-%d").date()
+                    updates["birth_date"] = b_str
+                    if "birth_year" not in payload:
+                        updates["birth_year"] = b_dt.year
+                except ValueError:
+                    return "invalid_birth_date", None
+            else:
+                updates["birth_date"] = None
+                if "birth_year" not in payload:
+                    updates["birth_year"] = None
+
+        if "birth_year" in payload:
+            by_val = payload["birth_year"]
+            if by_val is not None and str(by_val).strip() != "":
+                try:
+                    updates["birth_year"] = int(by_val)
+                except (ValueError, TypeError):
+                    return "invalid_birth_year", None
+            else:
+                updates["birth_year"] = None
+
+        if "is_spotlight" in payload:
+            is_spot = bool(payload["is_spotlight"])
+            if is_spot:
+                await reminders_col.update_many({"user_id": user_id, "is_spotlight": True}, {"$set": {"is_spotlight": False}})
+            updates["is_spotlight"] = is_spot
+
         if not updates:
-            return "no_updates", serialize_doc(rec)
+            out = serialize_doc(rec)
+            out["age"] = calculate_upcoming_age(rec)
+            return "no_updates", out
 
         await reminders_col.update_one({"_id": oid}, {"$set": updates})
         updated_rec = await reminders_col.find_one({"_id": oid})
@@ -775,7 +850,9 @@ def api_reminders_update(reminder_id):
         if _application is not None and updated_rec:
             schedule_reminder_job(_application, updated_rec)
 
-        return "success", serialize_doc(updated_rec)
+        out_doc = serialize_doc(updated_rec)
+        out_doc["age"] = calculate_upcoming_age(updated_rec)
+        return "success", out_doc
 
     try:
         status, updated_doc = run_async(_update())
@@ -791,6 +868,10 @@ def api_reminders_update(reminder_id):
             return jsonify({"success": False, "error": "Label must be under 120 characters."}), 400
         if status == "invalid_date":
             return jsonify({"success": False, "error": "Invalid date format. Expected YYYY-MM-DD."}), 400
+        if status == "invalid_birth_date":
+            return jsonify({"success": False, "error": "Invalid birth date format. Expected YYYY-MM-DD."}), 400
+        if status == "invalid_birth_year":
+            return jsonify({"success": False, "error": "Invalid birth year format."}), 400
 
         return jsonify({"success": True, "reminder": updated_doc})
     except Exception as e:

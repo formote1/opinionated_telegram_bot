@@ -864,6 +864,14 @@
             </select>
           </div>
         </div>
+        <div>
+          <label class="block text-slate-300 mb-1 font-medium">Birth Date (Optional)</label>
+          <input type="date" id="er-birth-date" class="w-full px-3 py-2 rounded-xl bg-slate-900 border border-white/10 text-white focus:outline-none focus:ring-2 focus:ring-sky-500 text-xs">
+        </div>
+        <div class="flex items-center gap-2 pt-1">
+          <input type="checkbox" id="er-spotlight" class="w-4 h-4 rounded bg-slate-900 border-white/10 text-sky-500 focus:ring-sky-500">
+          <label for="er-spotlight" class="text-slate-300 text-xs font-medium cursor-pointer">⭐ Spotlight Birthday (Primary focus)</label>
+        </div>
       </div>
       <div class="flex justify-end gap-2 pt-2">
         <button onclick="closeEditReminderModal()" class="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-medium hover:bg-slate-700 transition">Cancel</button>
@@ -1606,9 +1614,24 @@
           (r.label || '').toLowerCase().includes('birthday') ||
           (r.label || '').includes('🎂')
         );
+        const spotlightBadge = r.is_spotlight ? `
+          <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1">
+            ⭐ Spotlight
+          </span>
+        ` : '';
+        const ageTag = (r.age !== null && r.age !== undefined) ? `
+          <span class="px-2 py-0.5 rounded-md text-[11px] font-medium bg-purple-500/10 text-purple-300 border border-purple-500/20">
+            Turning ${r.age}
+          </span>
+        ` : '';
         const doneBtn = isBirthday ? '' : `
           <button onclick="completeReminder('${r._id || r.id}')" title="Mark Done" class="px-2.5 py-1.5 rounded-lg bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 transition flex items-center gap-1">
             ✅ Done
+          </button>
+        `;
+        const snoozeBtn = isBirthday ? '' : `
+          <button onclick="snoozeReminder('${r._id || r.id}')" title="Snooze 1 Day" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition flex items-center gap-1">
+            💤 +1d
           </button>
         `;
         const editBtn = `
@@ -1621,9 +1644,13 @@
           <div class="glass-card rounded-2xl p-5 border border-white/10 flex flex-col justify-between space-y-4 hover:border-sky-500/30 transition group">
             <div class="space-y-2">
               <div class="flex items-center justify-between">
-                <span class="px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 bg-slate-800/80 text-slate-300 border border-white/5">
-                  ${catIcon} ${r.category || 'General'}
-                </span>
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  <span class="px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 bg-slate-800/80 text-slate-300 border border-white/5">
+                    ${catIcon} ${r.category || 'General'}
+                  </span>
+                  ${spotlightBadge}
+                  ${ageTag}
+                </div>
                 <span class="px-2.5 py-1 rounded-full text-[11px] font-bold border ${badgeColor}">
                   ${r.days_left === 0 ? 'Today!' : (r.days_left < 0 ? 'Past Due' : r.days_left_text + ' left')}
                 </span>
@@ -1639,9 +1666,7 @@
 
             <div class="flex items-center justify-between pt-3 border-t border-white/5 text-xs">
               <div class="flex items-center gap-1.5">
-                <button onclick="snoozeReminder('${r._id || r.id}')" title="Snooze 1 Day" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition flex items-center gap-1">
-                  💤 +1d
-                </button>
+                ${snoozeBtn}
                 ${doneBtn}
                 ${editBtn}
               </div>
@@ -1788,6 +1813,8 @@
       document.getElementById('er-time').value = r.reminder_time || '09:00';
       document.getElementById('er-category').value = r.category || 'General';
       document.getElementById('er-recurrence').value = r.recurrence || 'once';
+      document.getElementById('er-birth-date').value = r.birth_date ? String(r.birth_date).substring(0, 10) : '';
+      document.getElementById('er-spotlight').checked = Boolean(r.is_spotlight);
       document.getElementById('edit-reminder-modal').classList.remove('hidden');
     }
 
@@ -1802,6 +1829,8 @@
       const reminder_time = document.getElementById('er-time').value;
       const category = document.getElementById('er-category').value;
       const recurrence = document.getElementById('er-recurrence').value;
+      const birth_date = document.getElementById('er-birth-date').value || null;
+      const is_spotlight = document.getElementById('er-spotlight').checked;
 
       if (!label || !target_date) {
         return showToast("Please fill in the title and target date.", "error");
@@ -1811,7 +1840,7 @@
         const res = await authFetch(`/api/reminders/${id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ label, target_date, reminder_time, category, recurrence })
+          body: JSON.stringify({ label, target_date, reminder_time, category, recurrence, birth_date, is_spotlight })
         });
         const data = await res.json();
         if (data.success) {

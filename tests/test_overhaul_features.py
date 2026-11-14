@@ -346,15 +346,8 @@ async def test_send_daily_reminder_birthday_omits_done_button():
         assert context.bot.send_message.awaited
         call_args = context.bot.send_message.call_args
         markup = call_args[1].get("reply_markup")
-        assert markup is not None
-        # Check that Done button is omitted
-        buttons = markup.inline_keyboard
-        button_texts = [btn.text for row in buttons for btn in row]
-        callback_data = [btn.callback_data for row in buttons for btn in row]
-        assert not any("Done" in text for text in button_texts)
-        assert not any("remdone_" in cb for cb in callback_data)
-        # Snooze button should still be present
-        assert any("Snooze" in text for text in button_texts)
+        # Birthday alerts have zero buttons (snooze nuked, no buttons)
+        assert markup is None
 
         # Now dispatch non-birthday reminder (e.g. Deadline)
         context.bot.send_message.reset_mock()
@@ -521,15 +514,8 @@ async def test_daily_reminder_birthday_label_omits_done_even_with_other_category
         assert context.bot.send_message.awaited
         call_args = context.bot.send_message.call_args
         markup = call_args[1].get("reply_markup")
-        buttons = markup.inline_keyboard
-        button_texts = [btn.text for row in buttons for btn in row]
-        callback_data = [btn.callback_data for row in buttons for btn in row]
-
-        # Assert no Done button appears anywhere
-        assert not any("Done" in text for text in button_texts)
-        assert not any("remdone_" in cb for cb in callback_data)
-        # Snooze button should still be available
-        assert any("Snooze" in text for text in button_texts)
+        # Classified as birthday, so zero buttons (no snooze, no done)
+        assert markup is None
 
 
 def test_api_auth_token_pasted_strings_and_case_insensitive(client):

@@ -450,6 +450,18 @@ async def core_routing_manager(update: Update, context: ContextTypes.DEFAULT_TYP
     user, chat_id, text = update.effective_user, update.effective_chat.id, update.message.text.strip()
     is_admin = (user.id == ADMIN_ID)
 
+    # Check pending birth date entry for reminder
+    pending_bdate_rid = context.user_data.get('pending_bdate_rid')
+    if pending_bdate_rid:
+        if text.lower() in ["/cancel", "cancel"]:
+            context.user_data.pop('pending_bdate_rid', None)
+            return await update.message.reply_text("🚫 Cancelled birth date update.")
+        if text.startswith("/"):
+            context.user_data.pop('pending_bdate_rid', None)
+        else:
+            from handlers.reminders import handle_pending_birth_date_input
+            return await handle_pending_birth_date_input(update, context, pending_bdate_rid, text)
+
     # Check pending passkey prompt
     pending_chat = context.user_data.get('pending_unlock_group_id')
     pending_prefix = context.user_data.get('pending_unlock_prefix')
