@@ -103,7 +103,7 @@ def create_application():
     # --- Reminder Handlers ---
     app.add_handler(CommandHandler("list", list_reminders))
     app.add_handler(CommandHandler(["editrem", "remind_edit"], edit_reminder_command))
-    app.add_handler(CallbackQueryHandler(handle_reminder_callback, pattern="^(delrem_|remsnooze_|remdone_|editrem_|edfield_|edset_)"))
+    app.add_handler(CallbackQueryHandler(handle_reminder_callback, pattern="^(delrem_|remsnooze_|remdone_|editrem_|edfield_|edset_|remfire_)"))
     app.add_handler(get_reminder_conversation_handler())
 
     # --- Media Retrieval & Browsing Handlers ---
@@ -195,19 +195,29 @@ async def main():
                 try:
                     t_date = datetime.strptime(r['target_date'], "%Y-%m-%d").date()
                     if t_date < today_utc:
-                        rec = r.get("recurrence", "once")
+                        cat_check = str(r.get("category", "")).strip()
+                        lbl_check = str(r.get("label", ""))
+                        is_bday = (cat_check.lower() == "birthday" or "birthday" in lbl_check.lower() or "🎂" in lbl_check)
+                        rec = "annually" if is_bday else r.get("recurrence", "once")
+
                         if rec == "once":
                             await reminders_col.delete_one({"_id": r['_id']})
                             continue
                         else:
-                            cat_check = r.get("category", "")
-                            rollover_days = {"daily": 1, "weekly": 7, "monthly": 30, "annually": 365}.get(
-                                rec, 365 if cat_check == "Birthday" else 7
-                            )
-                            new_date = t_date
-                            while new_date < today_utc:
-                                new_date += timedelta(days=rollover_days)
-                            new_target = new_date.strftime("%Y-%m-%d")
+                            if rec == "annually" or is_bday:
+                                new_date = t_date
+                                while new_date < today_utc:
+                                    try:
+                                        new_date = new_date.replace(year=new_date.year + 1)
+                                    except ValueError:
+                                        new_date = new_date.replace(year=new_date.year + 1, day=28)
+                                new_target = new_date.strftime("%Y-%m-%d")
+                            else:
+                                rollover_days = {"daily": 1, "weekly": 7, "monthly": 30}.get(rec, 7)
+                                new_date = t_date
+                                while new_date < today_utc:
+                                    new_date += timedelta(days=rollover_days)
+                                new_target = new_date.strftime("%Y-%m-%d")
                             await reminders_col.update_one({"_id": r['_id']}, {"$set": {"target_date": new_target, "last_notified": ""}})
                             r['target_date'] = new_target
                     schedule_reminder_job(application, r)

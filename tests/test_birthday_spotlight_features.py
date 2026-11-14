@@ -10,11 +10,15 @@ from handlers.reminders import (
     build_reminder_edit_markup,
     calculate_upcoming_age,
     edit_reminder_command,
+    format_concise_date,
+    format_reminder_notification,
     handle_pending_birth_date_input,
     handle_reminder_callback,
     list_reminders,
     resolve_reminder_id,
+    roll_date_annually,
     send_daily_reminder,
+    send_instant_reminder_dispatch,
 )
 from server import flask_app
 from utils.auth import generate_auth_token
@@ -113,26 +117,37 @@ async def test_list_reminders_sleek_layout_and_number_grid():
         text = args[0]
         markup = kwargs.get("reply_markup")
 
-        # Verify sleek typography and label before date
-        assert "<b>Reminders</b>" in text
+        # Verify Option B minimalist tree typography
+        assert "<b>Active Reminders</b>" in text
         assert "─────" not in text
         assert "📜" not in text
-        assert "Alice — 2026-11-15" in text
-        assert "Turning 25" in text
-        assert "⭐" in text
-        assert "Flight to Tokyo — 2026-12-01" in text
+        assert "1. Alice ⭐" in text
+        assert "└ 15th Nov · in 1d • Turning 25" in text
+        assert "2. Flight to Tokyo" in text
+        assert "└ 1st Dec · in 17d [Travel]" in text
+        assert "3. Bob" in text
+        assert "└ 10th Dec · in 26d • Turning 30" in text
 
-        # Verify compact number button grid (1 row of 3 buttons: 1, 2, 3)
+        # Verify dual-row button grid (Row 1: instant dispatch, Row 2: edit/manage)
         assert markup is not None
         rows = markup.inline_keyboard
-        assert len(rows) == 1
+        assert len(rows) == 2
+        # Row 1: instant silent triggers
         assert len(rows[0]) == 3
-        assert rows[0][0].text == "1"
-        assert rows[0][0].callback_data == f"editrem_{id1}"
-        assert rows[0][1].text == "2"
-        assert rows[0][1].callback_data == f"editrem_{id2}"
-        assert rows[0][2].text == "3"
-        assert rows[0][2].callback_data == f"editrem_{id3}"
+        assert rows[0][0].text == "⚡ 1"
+        assert rows[0][0].callback_data == f"remfire_{id1}"
+        assert rows[0][1].text == "⚡ 2"
+        assert rows[0][1].callback_data == f"remfire_{id2}"
+        assert rows[0][2].text == "⚡ 3"
+        assert rows[0][2].callback_data == f"remfire_{id3}"
+        # Row 2: manage / edit
+        assert len(rows[1]) == 3
+        assert rows[1][0].text == "⚙️ 1"
+        assert rows[1][0].callback_data == f"editrem_{id1}"
+        assert rows[1][1].text == "⚙️ 2"
+        assert rows[1][1].callback_data == f"editrem_{id2}"
+        assert rows[1][2].text == "⚙️ 3"
+        assert rows[1][2].callback_data == f"editrem_{id3}"
 
 
 @pytest.mark.asyncio
@@ -153,8 +168,11 @@ async def test_interactive_edit_card_and_buttons():
     card_text = build_reminder_card_text(rec)
     assert "<b>Label:</b> Charlie" in card_text
     assert "<b>Category:</b> Birthday" in card_text
+    assert "<b>Target Date:</b> <code>20th Aug</code>" in card_text
     assert "<b>Birth Date:</b> <code>1996-08-20</code> (Turning 30)" in card_text
     assert "<b>Spotlight:</b> Active ⭐" in card_text
+    # Birthday reminders suppress recurrence line
+    assert "<b>Recurrence:</b>" not in card_text
 
     # Spotlight on markup
     markup_spot = build_reminder_edit_markup(rec)
@@ -162,6 +180,8 @@ async def test_interactive_edit_card_and_buttons():
     flat_texts = [b.text for b in flat_btns]
     flat_cbs = [b.callback_data for b in flat_btns]
 
+    assert "⚡ Send on the Spot" in flat_texts
+    assert f"remfire_{rem_id}" in flat_cbs
     assert "✕ Remove Spotlight" in flat_texts
     assert f"edfield_{rem_id}_spotlight_off" in flat_cbs
     assert "🎂 Set Birth Date" in flat_texts
@@ -174,6 +194,7 @@ async def test_interactive_edit_card_and_buttons():
     rec_off["is_spotlight"] = False
     markup_off = build_reminder_edit_markup(rec_off)
     flat_texts_off = [btn.text for row in markup_off.inline_keyboard for btn in row]
+    assert "⚡ Send on the Spot" in flat_texts_off
     assert "⭐ Spotlight" in flat_texts_off
 
 
@@ -442,14 +463,20 @@ async def test_list_reminders_empty_and_grid_wrapping():
         markup = kwargs["reply_markup"]
         rows = markup.inline_keyboard
 
-        # 12 buttons should produce 3 rows: [5, 5, 2]
-        assert len(rows) == 3
+        # 12 buttons should produce 6 rows (3 pairs of [5, 5, 2] for ⚡ and ⚙️)
+        assert len(rows) == 6
         assert len(rows[0]) == 5
         assert len(rows[1]) == 5
-        assert len(rows[2]) == 2
-        assert rows[0][0].text == "1"
-        assert rows[1][0].text == "6"
-        assert rows[2][1].text == "12"
+        assert len(rows[2]) == 5
+        assert len(rows[3]) == 5
+        assert len(rows[4]) == 2
+        assert len(rows[5]) == 2
+        assert rows[0][0].text == "⚡ 1"
+        assert rows[1][0].text == "⚙️ 1"
+        assert rows[2][0].text == "⚡ 6"
+        assert rows[3][0].text == "⚙️ 6"
+        assert rows[4][1].text == "⚡ 12"
+        assert rows[5][1].text == "⚙️ 12"
 
 
 @pytest.mark.asyncio
@@ -934,5 +961,543 @@ def test_snooze_birthday_rejected_in_api(client):
         res_snooze = client.post(f"/api/reminders/{rem_id}/snooze", headers=headers)
         assert res_snooze.status_code == 400
         assert "Birthday reminders cannot be snoozed." in res_snooze.get_json()["error"]
+
+
+def test_format_concise_date_ordinals_and_edge_cases():
+    # 1. 1st, 2nd, 3rd, 4th, etc.
+    assert format_concise_date("2026-02-01") == "1st Feb"
+    assert format_concise_date("2026-11-02") == "2nd Nov"
+    assert format_concise_date("2026-03-03") == "3rd Mar"
+    assert format_concise_date("2026-04-04") == "4th Apr"
+
+    # 2. 11th, 12th, 13th exceptions
+    assert format_concise_date("2026-05-11") == "11th May"
+    assert format_concise_date("2026-06-12") == "12th Jun"
+    assert format_concise_date("2026-07-13") == "13th Jul"
+    assert format_concise_date("2026-08-14") == "14th Aug"
+
+    # 3. 21st, 22nd, 23rd, 24th
+    assert format_concise_date("2026-09-21") == "21st Sep"
+    assert format_concise_date("2026-10-22") == "22nd Oct"
+    assert format_concise_date("2026-11-23") == "23rd Nov"
+    assert format_concise_date("2026-12-24") == "24th Dec"
+    assert format_concise_date("2026-01-31") == "31st Jan"
+
+    # 4. datetime and date objects
+    assert format_concise_date(datetime(2027, 2, 1, 10, 0)) == "1st Feb"
+    assert format_concise_date(date(2027, 9, 24)) == "24th Sep"
+
+    # 5. Invalid / empty fallbacks
+    assert format_concise_date("") == ""
+    assert format_concise_date(None) == ""
+    assert format_concise_date("invalid-date") == "invalid-date"
+
+
+@pytest.mark.asyncio
+async def test_instant_trigger_remfire_callback_and_isolation():
+    user_id = 7788
+    rem_id = ObjectId()
+    rec = {
+        "_id": rem_id,
+        "user_id": user_id,
+        "label": "Alice's Birthday",
+        "category": "Birthday",
+        "target_date": "2026-11-25",
+        "reminder_time": "09:00",
+        "recurrence": "annually",
+        "birth_date": "2001-11-25",
+        "is_spotlight": True,
+        "last_notified": "2026-11-01",
+        "timezone": "UTC",
+    }
+
+    update = MagicMock()
+    user = MagicMock()
+    user.id = user_id
+    update.effective_user = user
+    query = MagicMock()
+    query.from_user = user
+    query.answer = AsyncMock()
+    update.callback_query = query
+    context = MagicMock()
+    context.bot.send_message = AsyncMock()
+
+    with patch("handlers.reminders.reminders_col") as mock_col:
+        mock_col.find_one = AsyncMock(return_value=rec)
+        mock_col.update_one = AsyncMock()
+        mock_col.delete_one = AsyncMock()
+
+        query.data = f"remfire_{rem_id}"
+        await handle_reminder_callback(update, context)
+
+        # 1. Answer toast verification
+        query.answer.assert_awaited_once_with("⚡ Sent reminder on the spot!")
+
+        # 2. Exact reminder notification dispatched
+        assert context.bot.send_message.awaited
+        k_args = context.bot.send_message.call_args[1]
+        assert k_args["chat_id"] == user_id
+        text = k_args["text"]
+        assert "<b>Birthday Reminder</b>" in text
+        assert "⭐ <b>Alice&#x27;s Birthday</b>" in text
+        assert "25th Nov" in text
+        assert "Turning 25" in text
+        assert "• Annually" not in text
+        assert "(🔄 Annually)" not in text
+        assert k_args["reply_markup"] is None
+
+        # 3. Target date, last_notified, and DB were completely untouched
+        mock_col.update_one.assert_not_awaited()
+        mock_col.delete_one.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_instant_trigger_remfire_non_birthday():
+    user_id = 7789
+    rem_id = ObjectId()
+    rec = {
+        "_id": rem_id,
+        "user_id": user_id,
+        "label": "Project Launch",
+        "category": "Launch",
+        "target_date": "2026-12-05",
+        "reminder_time": "12:00",
+        "recurrence": "once",
+        "last_notified": "",
+        "timezone": "UTC",
+    }
+
+    update = MagicMock()
+    user = MagicMock()
+    user.id = user_id
+    update.effective_user = user
+    query = MagicMock()
+    query.from_user = user
+    query.answer = AsyncMock()
+    update.callback_query = query
+    context = MagicMock()
+    context.bot.send_message = AsyncMock()
+
+    with patch("handlers.reminders.reminders_col") as mock_col:
+        mock_col.find_one = AsyncMock(return_value=rec)
+
+        query.data = f"remfire_{rem_id}"
+        await handle_reminder_callback(update, context)
+
+        query.answer.assert_awaited_once_with("⚡ Sent reminder on the spot!")
+        assert context.bot.send_message.awaited
+        k_args = context.bot.send_message.call_args[1]
+        text = k_args["text"]
+        markup = k_args["reply_markup"]
+
+        assert "<b>🚀 Launch Reminder</b>" in text
+        assert "<b>Project Launch</b>" in text
+        assert "5th Dec" in text
+        assert markup is not None
+        btn_texts = [b.text for row in markup.inline_keyboard for b in row]
+        assert "💤 Snooze (1 Day)" in btn_texts
+        assert "✅ Mark Done" in btn_texts
+
+
+@pytest.mark.asyncio
+async def test_instant_trigger_remfire_not_found_or_invalid():
+    user_id = 7790
+    update = MagicMock()
+    user = MagicMock()
+    user.id = user_id
+    update.effective_user = user
+    query = MagicMock()
+    query.from_user = user
+    query.answer = AsyncMock()
+    update.callback_query = query
+    context = MagicMock()
+
+    with patch("handlers.reminders.reminders_col") as mock_col:
+        # Not found
+        mock_col.find_one = AsyncMock(return_value=None)
+        query.data = f"remfire_{ObjectId()}"
+        await handle_reminder_callback(update, context)
+        query.answer.assert_awaited_once_with("Reminder not found.", show_alert=True)
+
+        # Invalid ID
+        query.answer.reset_mock()
+        query.data = "remfire_invalidid"
+        await handle_reminder_callback(update, context)
+        query.answer.assert_awaited_once_with("Error sending reminder.", show_alert=True)
+
+
+def test_api_reminders_trigger_companion_endpoint(client):
+    user_id = 8899
+    token = generate_auth_token(user_id, "trigger_tester")
+    headers = {"Authorization": f"Bearer {token}"}
+    rem_id = ObjectId()
+
+    rec = {
+        "_id": rem_id,
+        "user_id": user_id,
+        "label": "Buy Flowers",
+        "category": "Birthday",
+        "target_date": "2026-11-20",
+        "reminder_time": "09:00",
+        "recurrence": "annually",
+        "timezone": "UTC",
+    }
+
+    # 1. Happy path: bot is online and delivers notification
+    mock_app = MagicMock()
+    mock_app.bot = MagicMock()
+    mock_app.bot.send_message = AsyncMock()
+
+    with patch("server.reminders_col") as mock_col, \
+         patch("server._application", mock_app):
+        mock_col.find_one = AsyncMock(return_value=rec)
+        res = client.post(f"/api/reminders/{rem_id}/trigger", headers=headers)
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["success"] is True
+        assert data["message"] == "Reminder sent on the spot!"
+        assert mock_app.bot.send_message.awaited
+
+    # 2. Bot offline: returns 503
+    with patch("server.reminders_col") as mock_col, \
+         patch("server._application", None):
+        mock_col.find_one = AsyncMock(return_value=rec)
+        res_off = client.post(f"/api/reminders/{rem_id}/trigger", headers=headers)
+        assert res_off.status_code == 503
+        assert "Bot is currently offline." in res_off.get_json()["error"]
+
+    # 3. Reminder not found: returns 404
+    with patch("server.reminders_col") as mock_col, \
+         patch("server._application", mock_app):
+        mock_col.find_one = AsyncMock(return_value=None)
+        res_404 = client.post(f"/api/reminders/{rem_id}/trigger", headers=headers)
+        assert res_404.status_code == 404
+        assert "Reminder not found." in res_404.get_json()["error"]
+
+    # 4. Invalid ObjectId: returns 400
+    res_400 = client.post("/api/reminders/notanobjectid/trigger", headers=headers)
+    assert res_400.status_code == 400
+    assert "Invalid reminder ID." in res_400.get_json()["error"]
+
+    # 5. Unauthenticated: returns 401
+    res_401 = client.post(f"/api/reminders/{rem_id}/trigger")
+    assert res_401.status_code == 401
+
+
+def test_api_reminders_get_includes_concise_date(client):
+    user_id = 9911
+    token = generate_auth_token(user_id, "concise_tester")
+    headers = {"Authorization": f"Bearer {token}"}
+    rem_id = ObjectId()
+
+    doc = {
+        "_id": rem_id,
+        "user_id": user_id,
+        "label": "her Birthday",
+        "category": "Birthday",
+        "target_date": "2027-02-01",
+        "reminder_time": "09:00",
+        "recurrence": "annually",
+        "birth_date": None,
+        "birth_year": None,
+        "is_spotlight": False,
+        "timezone": "UTC",
+    }
+
+    with patch("server.reminders_col") as mock_col:
+        mock_cursor = MagicMock()
+        mock_cursor.to_list = AsyncMock(return_value=[doc])
+        mock_col.find.return_value.sort.return_value = mock_cursor
+
+        res = client.get("/api/reminders", headers=headers)
+        assert res.status_code == 200
+        items = res.get_json()["reminders"]
+        assert len(items) == 1
+        assert items[0]["concise_date"] == "1st Feb"
+
+
+@pytest.mark.asyncio
+async def test_format_reminder_notification_and_dispatch():
+    mock_bot = MagicMock()
+    mock_bot.send_message = AsyncMock()
+
+    # 1. Birthday reminder
+    b_rec = {
+        "_id": ObjectId(),
+        "label": "Mom",
+        "category": "Birthday",
+        "target_date": "2026-11-20",
+        "recurrence": "annually",
+        "is_spotlight": True,
+        "birth_year": 1960,
+    }
+    text, markup = format_reminder_notification(b_rec)
+    assert "<b>Birthday Reminder</b>" in text
+    assert "⭐ <b>Mom</b>" in text
+    assert "20th Nov" in text
+    assert "Turning" in text
+    assert markup is None
+
+    await send_instant_reminder_dispatch(mock_bot, b_rec, 1234)
+    assert mock_bot.send_message.awaited
+    assert mock_bot.send_message.call_args[1]["chat_id"] == 1234
+
+
+def test_roll_date_annually_leap_and_non_leap():
+    # 1. Normal annual rollover
+    d1 = date(2026, 9, 24)
+    assert roll_date_annually(d1) == date(2027, 9, 24)
+
+    # 2. Leap year Feb 1st rollover (must not become Jan 31st)
+    d2 = date(2024, 2, 1)
+    assert roll_date_annually(d2) == date(2025, 2, 1)
+
+    # 3. Leap day Feb 29th rollover to non-leap year falls back to Feb 28th
+    d3 = date(2024, 2, 29)
+    assert roll_date_annually(d3) == date(2025, 2, 28)
+
+    # 4. Roll forward past a target date
+    d4 = date(2022, 11, 20)
+    assert roll_date_annually(d4, target_after=date(2026, 11, 15)) == date(2026, 11, 20)
+
+
+@pytest.mark.asyncio
+async def test_daily_reminder_past_due_birthday_never_deleted_and_preserves_date():
+    user_id = 998877
+    context = MagicMock()
+    context.job.data = {"user_id": user_id, "timezone": "UTC", "reminder_time": "09:00"}
+    context.bot.send_message = AsyncMock()
+
+    # Birthday reminder past-due with recurrence 'once'
+    bday_doc = {
+        "_id": ObjectId(),
+        "user_id": user_id,
+        "label": "Best Friend",
+        "category": "Birthday",
+        "target_date": "2024-02-01",
+        "recurrence": "once",
+        "last_notified": "",
+    }
+
+    with patch("handlers.reminders.reminders_col") as mock_col, \
+         patch("handlers.reminders.notify_admin", AsyncMock()):
+        mock_col.find.return_value.to_list = AsyncMock(return_value=[bday_doc])
+        mock_col.delete_one = AsyncMock()
+        mock_col.update_one = AsyncMock()
+
+        await send_daily_reminder(context)
+
+        # MUST NOT be deleted
+        mock_col.delete_one.assert_not_called()
+        # MUST roll forward to next year preserving Feb 1st (not shifting to Jan 31st)
+        assert mock_col.update_one.awaited
+        update_call = mock_col.update_one.call_args[0][1]["$set"]
+        new_target = update_call["target_date"]
+        assert new_target.endswith("-02-01")
+
+
+@pytest.mark.asyncio
+async def test_remdone_birthday_with_once_recurrence_rolls_forward_annually():
+    user_id = 556677
+    update = MagicMock()
+    user = MagicMock()
+    user.id = user_id
+    update.effective_user = user
+    query = MagicMock()
+    query.from_user = user
+    query.answer = AsyncMock()
+    query.edit_message_text = AsyncMock()
+    query.message.reply_markup = None
+    update.callback_query = query
+    context = MagicMock()
+    context.application = None
+
+    rem_id = ObjectId()
+    rec = {
+        "_id": rem_id,
+        "user_id": user_id,
+        "label": "Sister",
+        "category": "Birthday",
+        "target_date": "2026-06-15",
+        "recurrence": "once",
+    }
+
+    with patch("handlers.reminders.reminders_col") as mock_col:
+        mock_col.find_one = AsyncMock(return_value=rec)
+        mock_col.delete_one = AsyncMock()
+        mock_col.update_one = AsyncMock()
+
+        query.data = f"remdone_{rem_id}"
+        await handle_reminder_callback(update, context)
+
+        # Must not be deleted; must roll over
+        mock_col.delete_one.assert_not_called()
+        mock_col.update_one.assert_awaited()
+        update_set = mock_col.update_one.call_args[0][1]["$set"]
+        assert update_set["target_date"] == "2027-06-15"
+        # Confirm text in message uses concise date and omits recurrence tag
+        msg = query.edit_message_text.call_args[0][0]
+        assert "15th Jun" in msg
+        assert "Annually" not in msg
+
+
+@pytest.mark.asyncio
+async def test_list_reminders_callback_pagination_preserves_order():
+    user_id = 332211
+    update = MagicMock()
+    user = MagicMock()
+    user.id = user_id
+    update.effective_user = user
+    update.effective_message.reply_text = AsyncMock()
+    query = MagicMock()
+    query.data = "edfield_global_back"
+    query.edit_message_text = AsyncMock()
+    update.callback_query = query
+    context = MagicMock()
+
+    # Create 26 reminders so pagination triggers at 25
+    twenty_six = [
+        {
+            "_id": ObjectId(),
+            "user_id": user_id,
+            "label": f"Task {i}",
+            "target_date": "2026-12-01",
+            "reminder_time": "09:00",
+            "category": "General",
+            "recurrence": "once",
+        }
+        for i in range(1, 27)
+    ]
+
+    with patch("handlers.reminders.reminders_col") as mock_col:
+        mock_cursor = MagicMock()
+        mock_cursor.to_list = AsyncMock(return_value=twenty_six)
+        mock_col.find.return_value.sort.return_value = mock_cursor
+
+        await list_reminders(update, context)
+
+        # Page 1 (chunk 1 with tasks 1-25) should EDIT the query message
+        assert query.edit_message_text.awaited
+        page1_text = query.edit_message_text.call_args[0][0]
+        assert "Active Reminders" in page1_text
+        assert "1. Task 1" in page1_text
+        assert "25. Task 25" in page1_text
+        assert "Task 26" not in page1_text
+
+        # Page 2 (chunk 2 with task 26) should be sent via reply_text
+        assert update.effective_message.reply_text.awaited
+        page2_text = update.effective_message.reply_text.call_args[0][0]
+        assert "Active Reminders (Cont.)" in page2_text
+        assert "26. Task 26" in page2_text
+
+
+def test_api_reminders_create_and_update_birthday_guarantees(client):
+    user_id = 112233
+    token = generate_auth_token(user_id, "bday_guard")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 1. Creating birthday forces recurrence = annually even if sent as once
+    with patch("server.reminders_col") as mock_col:
+        inserted_doc = None
+        async def fake_insert(doc):
+            nonlocal inserted_doc
+            inserted_doc = dict(doc)
+            inserted_doc["_id"] = ObjectId()
+            mock_res = MagicMock()
+            mock_res.inserted_id = inserted_doc["_id"]
+            return mock_res
+
+        mock_col.insert_one = fake_insert
+        res = client.post("/api/reminders", headers=headers, json={
+            "label": "My Brother",
+            "category": "Birthday",
+            "target_date": "2027-03-05",
+            "recurrence": "once",
+        })
+        assert res.status_code == 200
+        data = res.get_json()["reminder"]
+        assert inserted_doc["recurrence"] == "annually"
+        assert data["concise_date"] == "5th Mar"
+        assert data["status"] == "active"
+
+    # 2. Updating existing reminder to category Birthday forces recurrence = annually
+    rem_id = ObjectId()
+    existing_rem = {
+        "_id": rem_id,
+        "user_id": user_id,
+        "label": "Party",
+        "category": "General",
+        "target_date": "2027-04-10",
+        "recurrence": "once",
+    }
+    with patch("server.reminders_col") as mock_col:
+        mock_col.find_one = AsyncMock(side_effect=[
+            existing_rem,
+            {**existing_rem, "category": "Birthday", "recurrence": "annually"}
+        ])
+        mock_col.update_one = AsyncMock()
+
+        res_up = client.put(f"/api/reminders/{rem_id}", headers=headers, json={
+            "category": "Birthday"
+        })
+        assert res_up.status_code == 200
+        mock_col.update_one.assert_awaited()
+        update_set = mock_col.update_one.call_args[0][1]["$set"]
+        assert update_set["category"] == "Birthday"
+        assert update_set["recurrence"] == "annually"
+        res_doc = res_up.get_json()["reminder"]
+        assert res_doc["concise_date"] == "10th Apr"
+
+
+@pytest.mark.asyncio
+async def test_edfield_details_and_command_suppress_recurrence_for_birthdays():
+    user_id = 9988
+    rem_id = ObjectId()
+    bday_rec = {
+        "_id": rem_id,
+        "user_id": user_id,
+        "label": "Alice",
+        "category": "Birthday",
+        "target_date": "2027-02-01",
+        "recurrence": "annually",
+    }
+
+    # 1. edfield_details omits recurrence button for birthdays
+    update = MagicMock()
+    user = MagicMock()
+    user.id = user_id
+    update.effective_user = user
+    query = MagicMock()
+    query.from_user = user
+    query.data = f"edfield_{rem_id}_details"
+    query.edit_message_text = AsyncMock()
+    query.answer = AsyncMock()
+    update.callback_query = query
+    context = MagicMock()
+
+    with patch("handlers.reminders.reminders_col") as mock_col:
+        mock_col.find_one = AsyncMock(return_value=bday_rec)
+        await handle_reminder_callback(update, context)
+
+        assert query.edit_message_text.awaited
+        reply_markup = query.edit_message_text.call_args[1]["reply_markup"]
+        all_cb_data = [btn.callback_data for row in reply_markup.inline_keyboard for btn in row]
+        # Should NOT contain edfield_{id}_rec
+        assert not any("edfield_" in cb and "_rec" in cb for cb in all_cb_data)
+
+    # 2. /editrem <id> rec <val> informs user birthdays recur annually
+    update_cmd = MagicMock()
+    update_cmd.effective_user = user
+    update_cmd.effective_message.reply_text = AsyncMock()
+    context_cmd = MagicMock()
+    context_cmd.args = [str(rem_id), "rec", "daily"]
+
+    with patch("handlers.reminders.reminders_col") as mock_col:
+        mock_col.find_one = AsyncMock(return_value=bday_rec)
+        await edit_reminder_command(update_cmd, context_cmd)
+        assert update_cmd.effective_message.reply_text.awaited
+        reply = update_cmd.effective_message.reply_text.call_args[0][0]
+        assert "Birthday reminders automatically recur annually." in reply
+
 
 

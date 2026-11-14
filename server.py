@@ -31,7 +31,13 @@ from database import (
 )
 from handlers.admin import parse_duration, resolve_target_user
 from handlers.media import execute_file_delivery
-from handlers.reminders import calculate_upcoming_age, format_time_left, schedule_reminder_job
+from handlers.reminders import (
+    calculate_upcoming_age,
+    format_concise_date,
+    format_time_left,
+    schedule_reminder_job,
+    send_instant_reminder_dispatch,
+)
 from services.access import (
     check_access_gate,
     invalidate_group_keys_cache,
@@ -480,6 +486,7 @@ def api_reminders_list():
             doc = serialize_doc(r)
             doc["days_left"] = days_left
             doc["days_left_text"] = format_time_left(days_left)
+            doc["concise_date"] = format_concise_date(r.get("target_date", ""))
             doc["status"] = status
             doc["birth_date"] = r.get("birth_date")
             doc["birth_year"] = r.get("birth_year")
@@ -544,18 +551,32 @@ def api_reminders_create():
     else:
         birth_year = None
 
+    is_birthday = (category.lower() == "birthday" or "birthday" in label.lower() or "🎂" in label)
+    if is_birthday:
+        category = "Birthday"
+        recurrence = "annually"
+    elif recurrence not in ["once", "daily", "weekly", "monthly", "annually"]:
+        recurrence = "once"
+
     today_utc = datetime.now(timezone.utc).date()
     if recurrence == "once" and t_date < today_utc:
         return jsonify({"success": False, "error": "Target date for one-off reminder cannot be in the past."}), 400
 
-    if recurrence != "once" and t_date < today_utc:
-        rollover_days = {"daily": 1, "weekly": 7, "monthly": 30, "annually": 365}.get(
-            recurrence, 365 if category == "Birthday" else 7
-        )
-        new_date = t_date
-        while new_date < today_utc:
-            new_date += timedelta(days=rollover_days)
-        target_date = new_date.strftime("%Y-%m-%d")
+    if t_date < today_utc:
+        if recurrence == "annually" or is_birthday:
+            new_date = t_date
+            while new_date < today_utc:
+                try:
+                    new_date = new_date.replace(year=new_date.year + 1)
+                except ValueError:
+                    new_date = new_date.replace(year=new_date.year + 1, day=28)
+            target_date = new_date.strftime("%Y-%m-%d")
+        else:
+            rollover_days = {"daily": 1, "weekly": 7, "monthly": 30}.get(recurrence, 7)
+            new_date = t_date
+            while new_date < today_utc:
+                new_date += timedelta(days=rollover_days)
+            target_date = new_date.strftime("%Y-%m-%d")
 
     try:
         parts = reminder_time.split(":")
@@ -563,9 +584,6 @@ def api_reminders_create():
             reminder_time = "09:00"
     except Exception:
         reminder_time = "09:00"
-
-    if recurrence not in ["once", "daily", "weekly", "monthly", "annually"]:
-        recurrence = "once"
 
     doc = {
         "user_id": user_id,
@@ -598,6 +616,15 @@ def api_reminders_create():
             return jsonify({"success": False, "error": "Database unavailable."}), 500
         out_doc = serialize_doc(inserted)
         out_doc["age"] = calculate_upcoming_age(inserted)
+        out_doc["concise_date"] = format_concise_date(inserted.get("target_date", ""))
+        try:
+            t_dt_out = datetime.strptime(out_doc["target_date"][:10], "%Y-%m-%d").date()
+            d_left = (t_dt_out - today_utc).days
+        except Exception:
+            d_left = 0
+        out_doc["days_left"] = d_left
+        out_doc["days_left_text"] = format_time_left(d_left)
+        out_doc["status"] = "today" if d_left == 0 else ("past_due" if d_left < 0 else ("urgent" if d_left <= 3 else "active"))
         return jsonify({"success": True, "reminder": out_doc})
     except Exception as e:
         logger.error(f"Error creating reminder: {e}")
@@ -645,10 +672,56 @@ def api_reminders_snooze(reminder_id):
             return jsonify({"success": False, "error": "Reminder not found."}), 404
         if result == "cannot_snooze_birthday":
             return jsonify({"success": False, "error": "Birthday reminders cannot be snoozed."}), 400
-        return jsonify({"success": True, "target_date": result})
+        return jsonify({
+            "success": True,
+            "target_date": result,
+            "concise_date": format_concise_date(result)
+        })
     except Exception as e:
         logger.error(f"Error snoozing reminder: {e}")
         return jsonify({"success": False, "error": "Failed to snooze reminder."}), 500
+
+
+@flask_app.route('/api/reminders/<reminder_id>/trigger', methods=['POST'])
+@login_required
+def api_reminders_trigger(reminder_id):
+    """Instantly dispatches the reminder notification via Telegram bot on the spot."""
+    user = get_current_user()
+    user_id = user['user_id']
+
+    async def _trigger():
+        try:
+            oid = ObjectId(reminder_id)
+        except Exception:
+            return "invalid_id"
+
+        if reminders_col is None:
+            return "db_unavailable"
+
+        rec = await reminders_col.find_one({"_id": oid, "user_id": user_id})
+        if not rec:
+            return "not_found"
+
+        if not _application or not getattr(_application, "bot", None):
+            return "bot_offline"
+
+        await send_instant_reminder_dispatch(_application.bot, rec, user_id)
+        return "ok"
+
+    try:
+        result = run_async(_trigger())
+        if result == "invalid_id":
+            return jsonify({"success": False, "error": "Invalid reminder ID."}), 400
+        if result == "not_found":
+            return jsonify({"success": False, "error": "Reminder not found."}), 404
+        if result == "bot_offline":
+            return jsonify({"success": False, "error": "Bot is currently offline."}), 503
+        if result == "db_unavailable":
+            return jsonify({"success": False, "error": "Database unavailable."}), 503
+        return jsonify({"success": True, "message": "Reminder sent on the spot!"})
+    except Exception as e:
+        logger.error(f"Error triggering reminder: {e}")
+        return jsonify({"success": False, "error": "Failed to trigger reminder."}), 500
 
 
 @flask_app.route('/api/reminders/<reminder_id>/done', methods=['POST'])
@@ -670,18 +743,31 @@ def api_reminders_done(reminder_id):
         if not rec:
             return "not_found"
 
-        recurrence = rec.get("recurrence", "once")
+        raw_cat = str(rec.get("category", "")).strip()
+        raw_lbl = str(rec.get("label", ""))
+        is_bday = (raw_cat.lower() == "birthday" or "birthday" in raw_lbl.lower() or "🎂" in raw_lbl)
+        recurrence = "annually" if is_bday else rec.get("recurrence", "once")
+
         if recurrence != "once":
-            rollover_days = {"daily": 1, "weekly": 7, "monthly": 30, "annually": 365}.get(
-                recurrence, 365 if rec.get("category") == "Birthday" else 7
-            )
-            curr_date = datetime.strptime(rec['target_date'], "%Y-%m-%d")
-            new_date = (curr_date + timedelta(days=rollover_days)).strftime("%Y-%m-%d")
+            curr_date = datetime.strptime(rec['target_date'], "%Y-%m-%d").date()
+            if recurrence == "annually" or is_bday:
+                try:
+                    new_date_obj = curr_date.replace(year=curr_date.year + 1)
+                except ValueError:
+                    new_date_obj = curr_date.replace(year=curr_date.year + 1, day=28)
+                new_date = new_date_obj.strftime("%Y-%m-%d")
+            else:
+                rollover_days = {"daily": 1, "weekly": 7, "monthly": 30}.get(recurrence, 7)
+                new_date = (curr_date + timedelta(days=rollover_days)).strftime("%Y-%m-%d")
             await reminders_col.update_one({"_id": oid}, {"$set": {"target_date": new_date, "last_notified": ""}})
             rec["target_date"] = new_date
             if _application is not None:
                 schedule_reminder_job(_application, rec)
-            return {"action": "rolled_over", "new_date": new_date}
+            return {
+                "action": "rolled_over",
+                "new_date": new_date,
+                "concise_date": format_concise_date(new_date)
+            }
         else:
             await reminders_col.delete_one({"_id": oid})
             if _application and _application.job_queue:
@@ -839,9 +925,26 @@ def api_reminders_update(reminder_id):
                 await reminders_col.update_many({"user_id": user_id, "is_spotlight": True}, {"$set": {"is_spotlight": False}})
             updates["is_spotlight"] = is_spot
 
+        new_cat = str(updates.get("category", rec.get("category", ""))).strip()
+        new_lbl = str(updates.get("label", rec.get("label", "")))
+        is_bday = (new_cat.lower() == "birthday" or "birthday" in new_lbl.lower() or "🎂" in new_lbl)
+        if is_bday:
+            updates["category"] = "Birthday"
+            updates["recurrence"] = "annually"
+
         if not updates:
             out = serialize_doc(rec)
             out["age"] = calculate_upcoming_age(rec)
+            out["concise_date"] = format_concise_date(rec.get("target_date", ""))
+            today_utc = datetime.now(timezone.utc).date()
+            try:
+                t_dt_out = datetime.strptime(str(rec.get("target_date", ""))[:10], "%Y-%m-%d").date()
+                d_left = (t_dt_out - today_utc).days
+            except Exception:
+                d_left = 0
+            out["days_left"] = d_left
+            out["days_left_text"] = format_time_left(d_left)
+            out["status"] = "today" if d_left == 0 else ("past_due" if d_left < 0 else ("urgent" if d_left <= 3 else "active"))
             return "no_updates", out
 
         await reminders_col.update_one({"_id": oid}, {"$set": updates})
@@ -852,6 +955,16 @@ def api_reminders_update(reminder_id):
 
         out_doc = serialize_doc(updated_rec)
         out_doc["age"] = calculate_upcoming_age(updated_rec)
+        out_doc["concise_date"] = format_concise_date(updated_rec.get("target_date", ""))
+        today_utc = datetime.now(timezone.utc).date()
+        try:
+            t_dt_out = datetime.strptime(str(updated_rec.get("target_date", ""))[:10], "%Y-%m-%d").date()
+            d_left = (t_dt_out - today_utc).days
+        except Exception:
+            d_left = 0
+        out_doc["days_left"] = d_left
+        out_doc["days_left_text"] = format_time_left(d_left)
+        out_doc["status"] = "today" if d_left == 0 else ("past_due" if d_left < 0 else ("urgent" if d_left <= 3 else "active"))
         return "success", out_doc
 
     try:
