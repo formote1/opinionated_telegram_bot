@@ -34,6 +34,7 @@ from database import (
     reminders_col,
     unlocked_groups_col,
     users_col,
+    web_sessions_col,
 )
 from handlers.admin import (
     export_data,
@@ -169,6 +170,12 @@ async def main():
             await unlocked_groups_col.create_index("user_id", unique=True)
         if reminders_col is not None:
             await reminders_col.create_index([("user_id", 1), ("target_date", 1)])
+        if web_sessions_col is not None:
+            await web_sessions_col.create_index("token", unique=True)
+            try:
+                await web_sessions_col.create_index("expires_at", expireAfterSeconds=0)
+            except Exception:
+                await web_sessions_col.create_index("expires_at")
     except Exception as e:
         logger.warning(f"Index creation warning: {e}")
 

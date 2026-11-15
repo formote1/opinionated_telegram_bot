@@ -11,6 +11,7 @@ from handlers.reminders import (
     calculate_upcoming_age,
     edit_reminder_command,
     format_concise_date,
+    format_relative_countdown,
     format_reminder_notification,
     handle_pending_birth_date_input,
     handle_reminder_callback,
@@ -21,7 +22,12 @@ from handlers.reminders import (
     send_instant_reminder_dispatch,
 )
 from server import flask_app
-from utils.auth import generate_auth_token
+from utils.auth import (
+    delete_web_session,
+    generate_auth_token,
+    get_web_session,
+    save_web_session,
+)
 
 
 @pytest.fixture
@@ -121,12 +127,12 @@ async def test_list_reminders_sleek_layout_and_number_grid():
         assert "<b>Active Reminders</b>" in text
         assert "─────" not in text
         assert "📜" not in text
-        assert "1. Alice ⭐" in text
-        assert "└ 15th Nov · in 1d • Turning 25" in text
-        assert "2. Flight to Tokyo" in text
-        assert "└ 1st Dec · in 17d [Travel]" in text
-        assert "3. Bob" in text
-        assert "└ 10th Dec · in 26d • Turning 30" in text
+        assert "1. <code>Alice</code> ↑25 ✦" in text
+        assert "└ 15th Nov · today" in text
+        assert "2. <code>Flight to Tokyo</code>" in text
+        assert "└ 1st Dec · in 2w 2d [Travel]" in text
+        assert "3. <code>Bob</code> ↑30" in text
+        assert "└ 10th Dec · in 3w 4d" in text
 
         # Verify dual-row button grid (Row 1: instant dispatch, Row 2: edit/manage)
         assert markup is not None
@@ -166,11 +172,11 @@ async def test_interactive_edit_card_and_buttons():
     }
 
     card_text = build_reminder_card_text(rec)
-    assert "<b>Label:</b> Charlie" in card_text
+    assert "<b>Label:</b> <code>Charlie</code>" in card_text
     assert "<b>Category:</b> Birthday" in card_text
     assert "<b>Target Date:</b> <code>20th Aug</code>" in card_text
     assert "<b>Birth Date:</b> <code>1996-08-20</code> (Turning 30)" in card_text
-    assert "<b>Spotlight:</b> Active ⭐" in card_text
+    assert "<b>Spotlight:</b> Active ✦" in card_text
     # Birthday reminders suppress recurrence line
     assert "<b>Recurrence:</b>" not in card_text
 
@@ -195,7 +201,7 @@ async def test_interactive_edit_card_and_buttons():
     markup_off = build_reminder_edit_markup(rec_off)
     flat_texts_off = [btn.text for row in markup_off.inline_keyboard for btn in row]
     assert "⚡ Send on the Spot" in flat_texts_off
-    assert "⭐ Spotlight" in flat_texts_off
+    assert "✦ Spotlight" in flat_texts_off
 
 
 @pytest.mark.asyncio
@@ -349,8 +355,8 @@ async def test_send_daily_reminder_spotlight_expandable_blockquote():
         # Zero buttons for birthdays
         assert markup is None
 
-        # Alice is spotlighted, so she appears first with ⭐ and outside the blockquote
-        assert "⭐ <b>Alice</b>" in text
+        # Alice is spotlighted, so she appears first with ✦ and outside the blockquote
+        assert "✦ <b>Alice</b>" in text
         assert "Turning" in text
 
         # Bob and Charlie are grouped inside expandable blockquote
@@ -1039,7 +1045,7 @@ async def test_instant_trigger_remfire_callback_and_isolation():
         assert k_args["chat_id"] == user_id
         text = k_args["text"]
         assert "<b>Birthday Reminder</b>" in text
-        assert "⭐ <b>Alice&#x27;s Birthday</b>" in text
+        assert "✦ <b>Alice&#x27;s Birthday</b>" in text
         assert "25th Nov" in text
         assert "Turning 25" in text
         assert "• Annually" not in text
@@ -1233,7 +1239,7 @@ async def test_format_reminder_notification_and_dispatch():
     }
     text, markup = format_reminder_notification(b_rec)
     assert "<b>Birthday Reminder</b>" in text
-    assert "⭐ <b>Mom</b>" in text
+    assert "✦ <b>Mom</b>" in text
     assert "20th Nov" in text
     assert "Turning" in text
     assert markup is None
@@ -1380,15 +1386,15 @@ async def test_list_reminders_callback_pagination_preserves_order():
         assert query.edit_message_text.awaited
         page1_text = query.edit_message_text.call_args[0][0]
         assert "Active Reminders" in page1_text
-        assert "1. Task 1" in page1_text
-        assert "25. Task 25" in page1_text
+        assert "1. <code>Task 1</code>" in page1_text
+        assert "25. <code>Task 25</code>" in page1_text
         assert "Task 26" not in page1_text
 
         # Page 2 (chunk 2 with task 26) should be sent via reply_text
         assert update.effective_message.reply_text.awaited
         page2_text = update.effective_message.reply_text.call_args[0][0]
         assert "Active Reminders (Cont.)" in page2_text
-        assert "26. Task 26" in page2_text
+        assert "26. <code>Task 26</code>" in page2_text
 
 
 def test_api_reminders_create_and_update_birthday_guarantees(client):
@@ -1498,6 +1504,366 @@ async def test_edfield_details_and_command_suppress_recurrence_for_birthdays():
         assert update_cmd.effective_message.reply_text.awaited
         reply = update_cmd.effective_message.reply_text.call_args[0][0]
         assert "Birthday reminders automatically recur annually." in reply
+
+
+def test_format_relative_countdown():
+    assert format_relative_countdown(0) == "today"
+    assert format_relative_countdown(1) == "tomorrow"
+    assert format_relative_countdown(-1) == "yesterday"
+    assert format_relative_countdown(-5) == "5d ago"
+    assert format_relative_countdown(-30) == "30d ago"
+    assert format_relative_countdown(2) == "in 2d"
+    assert format_relative_countdown(7) == "in 1w"
+    assert format_relative_countdown(8) == "in 1w 1d"
+    assert format_relative_countdown(14) == "in 2w"
+    assert format_relative_countdown(16) == "in 2w 2d"
+    assert format_relative_countdown(30) == "in 1m"
+    assert format_relative_countdown(78) == "in 2m 2w 4d"
+    assert format_relative_countdown(313) == "in 10m 1w 6d"
+    assert format_relative_countdown(352) == "in 11m 3w 1d"
+
+
+@pytest.mark.asyncio
+async def test_list_reminders_next_year_expandable_blockquote_with_spotlight_exception():
+    update = MagicMock()
+    user = MagicMock()
+    user.id = 778899
+    update.effective_user = user
+    update.effective_message.reply_text = AsyncMock()
+    context = MagicMock()
+
+    id1, id2, id3, id4 = ObjectId(), ObjectId(), ObjectId(), ObjectId()
+    reminders = [
+        {
+            "_id": id1,
+            "user_id": 778899,
+            "label": "Current Year Birthday",
+            "target_date": "2026-11-20",
+            "category": "Birthday",
+            "recurrence": "annually",
+            "birth_year": 2000,
+            "is_spotlight": False,
+            "timezone": "UTC",
+        },
+        {
+            "_id": id2,
+            "user_id": 778899,
+            "label": "Next Year Spotlight",
+            "target_date": "2027-02-14",
+            "category": "Birthday",
+            "recurrence": "annually",
+            "birth_year": 1995,
+            "is_spotlight": True,
+            "timezone": "UTC",
+        },
+        {
+            "_id": id3,
+            "user_id": 778899,
+            "label": "Next Year Non-Spotlight",
+            "target_date": "2027-05-10",
+            "category": "Birthday",
+            "recurrence": "annually",
+            "birth_year": 1990,
+            "is_spotlight": False,
+            "timezone": "UTC",
+        },
+        {
+            "_id": id4,
+            "user_id": 778899,
+            "label": "Future Flight",
+            "target_date": "2027-06-01",
+            "category": "Travel",
+            "recurrence": "once",
+            "is_spotlight": False,
+            "timezone": "UTC",
+        },
+    ]
+
+    with patch("handlers.reminders.reminders_col") as mock_col:
+        mock_cursor = MagicMock()
+        mock_cursor.to_list = AsyncMock(return_value=reminders)
+        mock_col.find.return_value.sort.return_value = mock_cursor
+
+        await list_reminders(update, context)
+        assert update.effective_message.reply_text.awaited
+        text = update.effective_message.reply_text.call_args[0][0]
+
+        # 1. Main list contains current year birthday with monospace and age tag
+        assert "1. <code>Current Year Birthday</code> ↑26" in text
+
+        # 2. CRITICAL EXCEPTION: Next-year spotlighted birthday stays in main list outside blockquote
+        assert "2. <code>Next Year Spotlight</code> ↑32 ✦" in text
+
+        # 3. Non-birthday event stays in main list even if in next year
+        assert "4. <code>Future Flight</code>" in text
+        assert "[Travel]" in text
+
+        # 4. Next-year non-spotlight birthday is collapsed inside <blockquote expandable>
+        assert "<blockquote expandable>" in text
+        assert "Upcoming Next Year:" in text
+        assert "3. <code>Next Year Non-Spotlight</code> ↑37" in text
+        assert "</blockquote>" in text
+
+        # Verify blockquote structure: next year spotlight is NOT inside blockquote
+        bq_content = text.split("<blockquote expandable>")[1].split("</blockquote>")[0]
+        assert "3. <code>Next Year Non-Spotlight</code> ↑37" in bq_content
+        assert "Next Year Spotlight" not in bq_content
+        assert "Current Year Birthday" not in bq_content
+        assert "Future Flight" not in bq_content
+
+
+@pytest.mark.asyncio
+async def test_list_reminders_all_current_year_no_blockquote():
+    update = MagicMock()
+    user = MagicMock()
+    user.id = 121212
+    update.effective_user = user
+    update.effective_message.reply_text = AsyncMock()
+    context = MagicMock()
+
+    reminders = [
+        {
+            "_id": ObjectId(),
+            "user_id": 121212,
+            "label": "Sister",
+            "target_date": "2026-11-25",
+            "category": "Birthday",
+            "birth_year": 1999,
+            "is_spotlight": True,
+            "timezone": "UTC",
+        },
+        {
+            "_id": ObjectId(),
+            "user_id": 121212,
+            "label": "Doctor",
+            "target_date": "2026-12-05",
+            "category": "Medication",
+            "is_spotlight": False,
+            "timezone": "UTC",
+        },
+    ]
+
+    with patch("handlers.reminders.reminders_col") as mock_col:
+        mock_cursor = MagicMock()
+        mock_cursor.to_list = AsyncMock(return_value=reminders)
+        mock_col.find.return_value.sort.return_value = mock_cursor
+
+        await list_reminders(update, context)
+        assert update.effective_message.reply_text.awaited
+        text = update.effective_message.reply_text.call_args[0][0]
+
+        assert "1. <code>Sister</code> ↑27 ✦" in text
+        assert "2. <code>Doctor</code>" in text
+        # No blockquote when no next-year non-spotlight birthdays exist
+        assert "<blockquote expandable>" not in text
+
+
+@pytest.mark.asyncio
+async def test_persistent_web_auth_session_mongodb_lifecycle():
+    fake_sessions_db = {}
+
+    class MockWebSessionsCol:
+        async def update_one(self, filter_query, update_doc, upsert=False):
+            token = filter_query.get("token")
+            data = update_doc.get("$set", {})
+            fake_sessions_db[token] = dict(data)
+            return MagicMock(modified_count=1, upserted_id=token)
+
+        async def find_one(self, filter_query):
+            token = filter_query.get("token")
+            return fake_sessions_db.get(token)
+
+        async def delete_one(self, filter_query):
+            token = filter_query.get("token")
+            existed = token in fake_sessions_db
+            fake_sessions_db.pop(token, None)
+            return MagicMock(deleted_count=1 if existed else 0)
+
+    mock_col = MockWebSessionsCol()
+    with patch("database.web_sessions_col", mock_col):
+        # 1. Save session (30 days validity)
+        token = "test-persistent-token-xyz.12345"
+        saved = await save_web_session(token, 445566, "persist_user", expires_in=86400 * 30)
+        assert saved["user_id"] == 445566
+        assert saved["username"] == "persist_user"
+        assert token in fake_sessions_db
+        assert "expires_at" in fake_sessions_db[token]
+
+        # 2. Get active session
+        session_info = await get_web_session(token)
+        assert session_info is not None
+        assert session_info["user_id"] == 445566
+        assert session_info["username"] == "persist_user"
+
+        # 3. Expired session returns None and cleans up
+        fake_sessions_db[token]["expires_at"] = "2020-01-01T00:00:00+00:00"
+        expired_info = await get_web_session(token)
+        assert expired_info is None
+        assert token not in fake_sessions_db
+
+        # 4. Delete session upon logout
+        token2 = "test-token-2.67890"
+        await save_web_session(token2, 7788, "user2")
+        assert token2 in fake_sessions_db
+        deleted = await delete_web_session(token2)
+        assert deleted is True
+        assert token2 not in fake_sessions_db
+
+
+def test_server_persistent_web_session_across_restarts(client):
+    persistent_token = "persistent-stored-session-token-999.sig"
+    session_doc = {
+        "token": persistent_token,
+        "user_id": 99999,
+        "username": "persisted_dashboard_user",
+        "is_admin": False,
+        "created_at": "2026-11-15T00:00:00+00:00",
+        "expires_at": "2026-12-15T00:00:00+00:00",
+    }
+
+    mock_col = MagicMock()
+    with patch("server.web_sessions_col", mock_col), \
+         patch("database.web_sessions_col", mock_col):
+        mock_col.find_one = AsyncMock(return_value=session_doc)
+        mock_col.update_one = AsyncMock()
+
+        # 1. Even without valid HMAC or Flask cookie, user authenticates via MongoDB session
+        res = client.get("/api/auth/me", headers={"Authorization": f"Bearer {persistent_token}"})
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["authenticated"] is True
+        assert data["user"]["user_id"] == 99999
+        assert data["user"]["username"] == "persisted_dashboard_user"
+
+        # 2. POST /api/auth/token with persistent token restores session
+        res_post = client.post("/api/auth/token", json={"token": persistent_token})
+        assert res_post.status_code == 200
+        post_data = res_post.get_json()
+        assert post_data["success"] is True
+        assert post_data["user"]["user_id"] == 99999
+        mock_col.update_one.assert_awaited()
+
+        # 3. Logout cleans up persistent session
+        mock_col.delete_one = AsyncMock(return_value=MagicMock(deleted_count=1))
+        res_logout = client.post("/api/auth/logout", headers={"Authorization": f"Bearer {persistent_token}"})
+        assert res_logout.status_code == 200
+        mock_col.delete_one.assert_awaited_with({"token": persistent_token})
+
+        # 4. Session cookie logout also cleans up persistent session
+        mock_col.delete_one.reset_mock()
+        with client.session_transaction() as sess:
+            sess["user_id"] = 99999
+            sess["token"] = persistent_token
+        res_cookie_logout = client.post("/api/auth/logout")
+        assert res_cookie_logout.status_code == 200
+        mock_col.delete_one.assert_awaited_with({"token": persistent_token})
+
+
+def test_format_relative_countdown_extra_edge_cases():
+    assert format_relative_countdown(None) == ""
+    assert format_relative_countdown("abc") == ""
+    assert format_relative_countdown("14") == "in 2w"
+    assert format_relative_countdown(-2) == "2d ago"
+    assert format_relative_countdown(21) == "in 3w"
+    assert format_relative_countdown(28) == "in 4w"
+    assert format_relative_countdown(37) == "in 1m 1w"
+    assert format_relative_countdown(45) == "in 1m 2w 1d"
+    assert format_relative_countdown(60) == "in 2m"
+    assert format_relative_countdown(90) == "in 3m"
+    assert format_relative_countdown(365) == "in 12m 5d"
+
+
+@pytest.mark.asyncio
+async def test_list_reminders_non_birthday_with_birth_year_suppresses_age_tag():
+    update = MagicMock()
+    user = MagicMock()
+    user.id = 556677
+    update.effective_user = user
+    update.effective_message.reply_text = AsyncMock()
+    context = MagicMock()
+
+    id1 = ObjectId()
+    reminders = [
+        {
+            "_id": id1,
+            "user_id": 556677,
+            "label": "Flight to Paris",
+            "target_date": "2026-12-10",
+            "category": "Travel",
+            "recurrence": "once",
+            "birth_year": 1995,  # accidentally set
+            "is_spotlight": False,
+            "timezone": "UTC",
+        }
+    ]
+
+    with patch("handlers.reminders.reminders_col") as mock_col:
+        mock_cursor = MagicMock()
+        mock_cursor.to_list = AsyncMock(return_value=reminders)
+        mock_col.find.return_value.sort.return_value = mock_cursor
+
+        await list_reminders(update, context)
+        assert update.effective_message.reply_text.awaited
+        text = update.effective_message.reply_text.call_args[0][0]
+
+        # Verify age is NOT rendered for non-birthday
+        assert "↑" not in text
+        assert "1. <code>Flight to Paris</code>" in text
+        assert "[Travel]" in text
+
+
+@pytest.mark.asyncio
+async def test_list_reminders_all_next_year_birthdays_only_blockquote():
+    update = MagicMock()
+    user = MagicMock()
+    user.id = 889900
+    update.effective_user = user
+    update.effective_message.reply_text = AsyncMock()
+    context = MagicMock()
+
+    id1, id2 = ObjectId(), ObjectId()
+    reminders = [
+        {
+            "_id": id1,
+            "user_id": 889900,
+            "label": "Future Birthday One",
+            "target_date": "2027-03-01",
+            "category": "Birthday",
+            "recurrence": "annually",
+            "birth_year": 1990,
+            "is_spotlight": False,
+            "timezone": "UTC",
+        },
+        {
+            "_id": id2,
+            "user_id": 889900,
+            "label": "Future Birthday Two",
+            "target_date": "2027-08-15",
+            "category": "Birthday",
+            "recurrence": "annually",
+            "birth_year": 1995,
+            "is_spotlight": False,
+            "timezone": "UTC",
+        },
+    ]
+
+    with patch("handlers.reminders.reminders_col") as mock_col:
+        mock_cursor = MagicMock()
+        mock_cursor.to_list = AsyncMock(return_value=reminders)
+        mock_col.find.return_value.sort.return_value = mock_cursor
+
+        await list_reminders(update, context)
+        assert update.effective_message.reply_text.awaited
+        text = update.effective_message.reply_text.call_args[0][0]
+
+        assert "<b>Active Reminders</b>" in text
+        assert "<blockquote expandable>" in text
+        assert "Upcoming Next Year:" in text
+        assert "1. <code>Future Birthday One</code> ↑37" in text
+        assert "2. <code>Future Birthday Two</code> ↑32" in text
+        assert "</blockquote>" in text
+
+
 
 
 

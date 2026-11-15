@@ -144,7 +144,7 @@ def format_reminder_notification(r: dict) -> tuple[str, InlineKeyboardMarkup | N
 
     if is_bday:
         header = "<b>Birthday Reminder</b>"
-        prefix = "⭐ " if r.get("is_spotlight") else ""
+        prefix = "✦ " if r.get("is_spotlight") else ""
         escaped_label = html.escape(raw_lbl or "Birthday")
         age = calculate_upcoming_age(r)
         age_str = f" • Turning {age}" if age is not None else ""
@@ -178,6 +178,44 @@ async def send_instant_reminder_dispatch(bot, r: dict, user_id: int):
         reply_markup=reply_markup,
         parse_mode="HTML"
     )
+
+
+def format_relative_countdown(days_left: int) -> str:
+    """
+    Formats countdown into concise units: 'today', 'tomorrow', or 'in Xm Yw Zd',
+    omitting zero units (e.g. 'in 2m 2w 4d', 'in 2w', 'in 3d').
+    Handles negative offsets with 'yesterday' or 'Xd ago'.
+    """
+    if days_left is None:
+        return ""
+    try:
+        days_left = int(days_left)
+    except (ValueError, TypeError):
+        return ""
+
+    if days_left == 0:
+        return "today"
+    if days_left == 1:
+        return "tomorrow"
+    if days_left == -1:
+        return "yesterday"
+    if days_left < 0:
+        return f"{abs(days_left)}d ago"
+
+    months = days_left // 30
+    rem = days_left % 30
+    weeks = rem // 7
+    days = rem % 7
+
+    parts = []
+    if months > 0:
+        parts.append(f"{months}m")
+    if weeks > 0:
+        parts.append(f"{weeks}w")
+    if days > 0:
+        parts.append(f"{days}d")
+
+    return "in " + " ".join(parts) if parts else f"in {days_left}d"
 
 
 def format_time_left(days_left: int) -> str:
@@ -502,7 +540,7 @@ async def send_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
 
                 age = calculate_upcoming_age(b_rec)
                 age_str = f" • Turning {age}" if age is not None else ""
-                prefix = "⭐ " if is_spot else ""
+                prefix = "✦ " if is_spot else ""
                 return f"{prefix}<b>{escaped_label}</b> — {date_info}{age_str}"
 
             lines = []
@@ -611,104 +649,92 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return await update.effective_message.reply_text("No active reminders.")
 
         tz_cache = {}
-        current_lines = ["<b>Active Reminders</b>"]
-        current_batch = []
-        current_len = len(current_lines[0])
-
         first_page = True
-        for idx, r in enumerate(reminders, 1):
-            raw_label = str(r.get('label', 'No Label'))
-            label_esc = html.escape(raw_label)
-            target_date_str = r.get('target_date', '')
-            tz_name = r.get('timezone', 'UTC')
-            if tz_name not in tz_cache:
-                try: tz_cache[tz_name] = pytz.timezone(tz_name)
-                except Exception: tz_cache[tz_name] = pytz.UTC
-            user_tz = tz_cache[tz_name]
 
-            try:
-                now_local = datetime.now(user_tz).date()
-                target_dt = datetime.strptime(str(target_date_str)[:10], "%Y-%m-%d").date()
-                days_left = (target_dt - now_local).days
-            except Exception:
-                days_left = 0
+        for chunk_start in range(0, len(reminders), 25):
+            chunk = reminders[chunk_start:chunk_start + 25]
+            main_entries = []
+            next_year_entries = []
+            chunk_batch = []
 
-            if days_left == 0:
-                rel_str = "today"
-            elif days_left < 0:
-                rel_str = f"{abs(days_left)}d ago"
-            else:
-                rel_str = f"in {days_left}d"
+            for idx_offset, r in enumerate(chunk):
+                idx = chunk_start + idx_offset + 1
+                chunk_batch.append((idx, r))
 
-            concise_date = format_concise_date(target_date_str)
+                raw_label = str(r.get('label', 'No Label'))
+                label_esc = html.escape(raw_label)
+                target_date_str = r.get('target_date', '')
+                tz_name = r.get('timezone', 'UTC')
+                if tz_name not in tz_cache:
+                    try: tz_cache[tz_name] = pytz.timezone(tz_name)
+                    except Exception: tz_cache[tz_name] = pytz.UTC
+                user_tz = tz_cache[tz_name]
 
-            raw_cat = str(r.get('category', 'General')).strip()
-            is_bday = (raw_cat.lower() == "birthday" or "birthday" in raw_label.lower() or "🎂" in raw_label)
+                try:
+                    now_local = datetime.now(user_tz).date()
+                    target_dt = datetime.strptime(str(target_date_str)[:10], "%Y-%m-%d").date()
+                    days_left = (target_dt - now_local).days
+                except Exception:
+                    now_local = datetime.now(pytz.UTC).date()
+                    target_dt = None
+                    days_left = 0
 
-            if is_bday:
-                cat_tag = ""
-            else:
-                cat_display = html.escape(r.get('category', 'General') or 'General')
-                rec = r.get('recurrence', 'once')
-                rec_tag = f" • {html.escape(rec.capitalize())}" if rec != 'once' else ""
-                cat_tag = f" [{cat_display}{rec_tag}]"
+                countdown_text = format_relative_countdown(days_left)
+                concise_date = format_concise_date(target_date_str)
 
-            age = calculate_upcoming_age(r)
-            age_tag = f" • Turning {age}" if age is not None else ""
-            spotlight_tag = " ⭐" if r.get('is_spotlight') else ""
+                raw_cat = str(r.get('category', 'General')).strip()
+                is_bday = (raw_cat.lower() == "birthday" or "birthday" in raw_label.lower() or "🎂" in raw_label)
 
-            entry_text = f"{idx}. {label_esc}{spotlight_tag}\n   └ {concise_date} · {rel_str}{cat_tag}{age_tag}"
-
-            if (current_len + len(entry_text) > 3500) or len(current_batch) >= 25:
-                markup = build_list_keyboard(current_batch)
-                chunk_text = "\n\n".join(current_lines)
-                if is_callback and first_page:
-                    try:
-                        await query.edit_message_text(
-                            chunk_text,
-                            reply_markup=markup,
-                            parse_mode="HTML"
-                        )
-                    except Exception:
-                        await update.effective_message.reply_text(
-                            chunk_text,
-                            reply_markup=markup,
-                            parse_mode="HTML"
-                        )
-                    first_page = False
+                if is_bday:
+                    cat_tag = ""
                 else:
-                    await update.effective_message.reply_text(
-                        chunk_text,
-                        reply_markup=markup,
-                        parse_mode="HTML"
-                    )
-                current_lines = ["<b>Active Reminders (Cont.)</b>"]
-                current_batch = []
-                current_len = len(current_lines[0])
+                    cat_display = html.escape(r.get('category', 'General') or 'General')
+                    rec = r.get('recurrence', 'once')
+                    rec_tag = f" • {html.escape(rec.capitalize())}" if rec != 'once' else ""
+                    cat_tag = f" [{cat_display}{rec_tag}]"
 
-            current_lines.append(entry_text)
-            current_batch.append((idx, r))
-            current_len += len(entry_text) + 2
+                age = calculate_upcoming_age(r) if is_bday else None
+                age_tag = f" ↑{age}" if age is not None else ""
+                is_spot = bool(r.get('is_spotlight'))
+                spotlight_tag = " ✦" if is_spot else ""
 
-        if current_batch:
-            markup = build_list_keyboard(current_batch)
-            text_to_send = "\n\n".join(current_lines)
+                date_part = f"{concise_date} · {countdown_text}" if concise_date else countdown_text
+                entry_text = f"{idx}. <code>{label_esc}</code>{age_tag}{spotlight_tag}\n   └ {date_part}{cat_tag}"
+
+                is_next_year = bool(target_dt and target_dt.year > now_local.year)
+                # CRITICAL EXCEPTION: Spotlighted reminders are ALWAYS outside the blockquote in the main list, regardless of year!
+                if is_bday and is_next_year and not is_spot:
+                    next_year_entries.append(entry_text)
+                else:
+                    main_entries.append(entry_text)
+
+            header = "<b>Active Reminders</b>" if chunk_start == 0 else "<b>Active Reminders (Cont.)</b>"
+            lines = [header]
+            if main_entries:
+                lines.extend(main_entries)
+            if next_year_entries:
+                lines.append("<blockquote expandable>\nUpcoming Next Year:\n" + "\n\n".join(next_year_entries) + "\n</blockquote>")
+
+            chunk_text = "\n\n".join(lines)
+            markup = build_list_keyboard(chunk_batch)
+
             if is_callback and first_page:
                 try:
                     await query.edit_message_text(
-                        text_to_send,
+                        chunk_text,
                         reply_markup=markup,
                         parse_mode="HTML"
                     )
                 except Exception:
                     await update.effective_message.reply_text(
-                        text_to_send,
+                        chunk_text,
                         reply_markup=markup,
                         parse_mode="HTML"
                     )
+                first_page = False
             else:
                 await update.effective_message.reply_text(
-                    text_to_send,
+                    chunk_text,
                     reply_markup=markup,
                     parse_mode="HTML"
                 )
@@ -904,7 +930,7 @@ async def handle_reminder_callback(update: Update, context: ContextTypes.DEFAULT
                         text = build_reminder_card_text(rec)
                         markup = build_reminder_edit_markup(rec)
                         await query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
-                        return await query.answer("⭐ Set as spotlight birthday!")
+                        return await query.answer("✦ Set as spotlight birthday!")
                 except Exception as e:
                     logger.error(f"Spotlight on error: {e}")
             return await query.answer("Failed to update spotlight.", show_alert=True)
@@ -1188,12 +1214,12 @@ def build_reminder_card_text(r: dict) -> str:
         b_str = "Not set"
 
     is_spot = bool(r.get('is_spotlight', False))
-    spot_str = "Active ⭐" if is_spot else "Off"
+    spot_str = "Active ✦" if is_spot else "Off"
 
     lines = [
         "<b>CUSTOMIZE REMINDER</b>",
         "",
-        f"<b>Label:</b> {label}",
+        f"<b>Label:</b> <code>{label}</code>",
         f"<b>Category:</b> {cat}",
         f"<b>Target Date:</b> <code>{concise_d}</code>",
         f"<b>Time:</b> <code>{time_val}</code>",
@@ -1221,7 +1247,7 @@ def build_reminder_edit_markup(r_id_or_rec, is_spotlight: bool | None = None):
     spotlight_btn = (
         InlineKeyboardButton("✕ Remove Spotlight", callback_data=f"edfield_{r_id}_spotlight_off")
         if is_spotlight
-        else InlineKeyboardButton("⭐ Spotlight", callback_data=f"edfield_{r_id}_spotlight_on")
+        else InlineKeyboardButton("✦ Spotlight", callback_data=f"edfield_{r_id}_spotlight_on")
     )
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("⚡ Send on the Spot", callback_data=f"remfire_{r_id}")],

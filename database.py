@@ -13,3 +13,5 @@ unlocked_groups_col = db.unlocked_users if db is not None else None
 logs_col = db.system_logs if db is not None else None
 users_col = db.users if db is not None else None
 prefix_labels_col = db.prefix_labels if db is not None else None
+web_sessions_col = db.web_sessions if db is not None else None
+

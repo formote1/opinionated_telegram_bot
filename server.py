@@ -28,6 +28,7 @@ from database import (
     reminders_col,
     unlocked_groups_col,
     users_col,
+    web_sessions_col,
 )
 from handlers.admin import parse_duration, resolve_target_user
 from handlers.media import execute_file_delivery
@@ -48,7 +49,10 @@ from services.access import (
 )
 from services.ascii_art import SUPPORTED_ASCII_FONTS, generate_ascii_art
 from utils.auth import (
+    delete_web_session,
     generate_auth_token,
+    get_web_session,
+    save_web_session,
     verify_auth_pin,
     verify_auth_token,
     verify_telegram_init_data,
@@ -148,19 +152,11 @@ def serialize_doc(doc):
 
 def get_current_user():
     """
-    Retrieves authenticated user from session cookie or token (Authorization / X-Auth-Token headers).
+    Retrieves authenticated user from token (Authorization / X-Auth-Token / initData)
+    or session cookie.
     Returns dict {"user_id": int, "username": str, "is_admin": bool} or None.
     """
-    # 1. Session cookie
-    uid = session.get("user_id")
-    if uid:
-        return {
-            "user_id": uid,
-            "username": session.get("username", ""),
-            "is_admin": bool(ADMIN_ID and uid == ADMIN_ID)
-        }
-
-    # 2. Authorization header: Bearer <token>
+    # 1. Authorization header: Bearer <token>
     auth_hdr = request.headers.get("Authorization", "").strip()
     token = None
     if auth_hdr.startswith("Bearer "):
@@ -168,25 +164,41 @@ def get_current_user():
     elif auth_hdr and " " not in auth_hdr:
         token = auth_hdr
 
-    # 3. X-Auth-Token header
+    # 2. X-Auth-Token header
     if not token:
         token = request.headers.get("X-Auth-Token", "").strip() or None
 
-    # 4. Query parameter token
+    # 3. Query parameter token
     if not token:
         token = request.args.get("token", "").strip() or None
 
     if token:
+        if web_sessions_col is not None:
+            try:
+                db_session = run_async(get_web_session(token))
+                if db_session:
+                    return db_session
+            except Exception:
+                pass
         user_info = verify_auth_token(token)
         if user_info:
             return user_info
 
-    # 5. Telegram WebApp initData header / parameter
+    # 4. Telegram WebApp initData header / parameter
     init_data = request.headers.get("X-Telegram-Init-Data", "").strip() or request.args.get("init_data", "").strip()
     if init_data:
         user_info = verify_telegram_init_data(init_data)
         if user_info:
             return user_info
+
+    # 5. Session cookie
+    uid = session.get("user_id")
+    if uid:
+        return {
+            "user_id": uid,
+            "username": session.get("username", ""),
+            "is_admin": bool(ADMIN_ID and uid == ADMIN_ID)
+        }
 
     return None
 
@@ -238,7 +250,13 @@ def web_login():
     elif token and re.match(r'^\d{6}$', token):
         user_info = verify_auth_pin(token)
     elif token:
-        user_info = verify_auth_token(token)
+        if web_sessions_col is not None:
+            try:
+                user_info = run_async(get_web_session(token))
+            except Exception:
+                pass
+        if not user_info:
+            user_info = verify_auth_token(token)
 
     if not user_info:
         return redirect('/?auth=invalid' if (token or pin) else '/?auth=missing')
@@ -247,12 +265,24 @@ def web_login():
     session['username'] = user_info['username']
     session['is_admin'] = user_info['is_admin']
     effective_token = token if (token and '.' in token) else generate_auth_token(user_info['user_id'], user_info['username'])
+    session['token'] = effective_token
+    if web_sessions_col is not None:
+        try:
+            run_async(save_web_session(effective_token, user_info['user_id'], user_info['username']))
+        except Exception:
+            pass
     return redirect(f'/?auth=success&token={effective_token}')
 
 
 @flask_app.route('/logout')
 def web_logout():
     """Clears the session and returns to companion home."""
+    token = request.args.get("token", "").strip() or session.get("token") or None
+    if token and web_sessions_col is not None:
+        try:
+            run_async(delete_web_session(token))
+        except Exception:
+            pass
     session.clear()
     return redirect('/')
 
@@ -376,9 +406,15 @@ def api_auth_token():
     if not user_info and token_to_verify and re.match(r'^\d{6}$', token_to_verify):
         user_info = verify_auth_pin(token_to_verify)
 
-    # 4. HMAC Token verification
+    # 4. HMAC Token verification / Persistent session verification
     if not user_info and token_to_verify:
-        user_info = verify_auth_token(token_to_verify)
+        if web_sessions_col is not None:
+            try:
+                user_info = run_async(get_web_session(token_to_verify))
+            except Exception:
+                pass
+        if not user_info:
+            user_info = verify_auth_token(token_to_verify)
 
     # 5. Telegram WebApp initData
     if not user_info and init_data:
@@ -393,6 +429,12 @@ def api_auth_token():
 
     # Always provide an active companion token for Bearer authentication
     issued_token = token_to_verify if (token_to_verify and "." in token_to_verify) else generate_auth_token(user_info['user_id'], user_info['username'])
+    session['token'] = issued_token
+    if web_sessions_col is not None:
+        try:
+            run_async(save_web_session(issued_token, user_info['user_id'], user_info['username']))
+        except Exception:
+            pass
 
     return jsonify({
         "success": True,
@@ -408,6 +450,21 @@ def api_auth_token():
 @flask_app.route('/api/auth/logout', methods=['POST'])
 def api_auth_logout():
     """Clears user session."""
+    auth_hdr = request.headers.get("Authorization", "").strip()
+    token = None
+    if auth_hdr.startswith("Bearer "):
+        token = auth_hdr[7:].strip()
+    elif auth_hdr and " " not in auth_hdr:
+        token = auth_hdr
+    if not token:
+        token = request.headers.get("X-Auth-Token", "").strip() or None
+    if not token:
+        token = session.get("token") or None
+    if token and web_sessions_col is not None:
+        try:
+            run_async(delete_web_session(token))
+        except Exception:
+            pass
     session.clear()
     return jsonify({"success": True})
 

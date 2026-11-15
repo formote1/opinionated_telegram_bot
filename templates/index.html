@@ -870,7 +870,7 @@
         </div>
         <div class="flex items-center gap-2 pt-1">
           <input type="checkbox" id="er-spotlight" class="w-4 h-4 rounded bg-slate-900 border-white/10 text-sky-500 focus:ring-sky-500">
-          <label for="er-spotlight" class="text-slate-300 text-xs font-medium cursor-pointer">⭐ Spotlight Birthday (Primary focus)</label>
+          <label for="er-spotlight" class="text-slate-300 text-xs font-medium cursor-pointer">✦ Spotlight Birthday (Primary focus)</label>
         </div>
       </div>
       <div class="flex justify-end gap-2 pt-2">
@@ -1277,7 +1277,25 @@
         if (data.authenticated) {
           State.user = data.user;
         } else {
-          State.user = null;
+          // If session cookie expired or server restarted, verify persistent token stored in localStorage
+          const savedToken = localStorage.getItem('auth_token');
+          if (savedToken) {
+            const reauthRes = await fetch('/api/auth/token', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ token: savedToken })
+            });
+            const reauthData = await reauthRes.json();
+            if (reauthData.success) {
+              if (reauthData.token) localStorage.setItem('auth_token', reauthData.token);
+              State.user = reauthData.user;
+            } else {
+              localStorage.removeItem('auth_token');
+              State.user = null;
+            }
+          } else {
+            State.user = null;
+          }
         }
       } catch (e) {
         State.user = null;
@@ -1331,8 +1349,18 @@
     }
 
     async function logout() {
+      const savedToken = localStorage.getItem('auth_token');
       localStorage.removeItem('auth_token');
-      await authFetch('/api/auth/logout', { method: 'POST' });
+      try {
+        if (savedToken) {
+          await fetch('/api/auth/logout', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${savedToken}` }
+          });
+        } else {
+          await fetch('/api/auth/logout', { method: 'POST' });
+        }
+      } catch (e) {}
       State.user = null;
       renderUserHeader();
       switchTab('ascii');
@@ -1616,7 +1644,7 @@
         );
         const spotlightBadge = r.is_spotlight ? `
           <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1">
-            ⭐ Spotlight
+            ✦ Spotlight
           </span>
         ` : '';
         const ageTag = (r.age !== null && r.age !== undefined) ? `

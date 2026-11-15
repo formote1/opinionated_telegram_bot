@@ -5,6 +5,7 @@ import json
 import secrets
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qsl, unquote
 
 from config import ADMIN_ID, TOKEN
@@ -63,10 +64,11 @@ def _get_auth_secret() -> bytes:
     return (TOKEN or "opinionated-bot-default-secret-key").encode("utf-8")
 
 
-def generate_auth_token(user_id: int, username: str | None = None, expires_in: int = 3600) -> str:
+def generate_auth_token(user_id: int, username: str | None = None, expires_in: int = 86400 * 30) -> str:
     """
     Generates a secure, time-limited HMAC-signed token for web companion login.
     Format: <base64_payload>.<hmac_signature>
+    Defaults to 30 days (86400 * 30 s) validity.
     """
     ts = int(time.time())
     uname = username or ""
@@ -120,6 +122,100 @@ def verify_auth_token(token: str, max_age: int | None = None) -> dict | None:
         }
     except Exception:
         return None
+
+
+async def save_web_session(token: str, user_id: int, username: str | None = None, expires_in: int = 86400 * 30) -> dict:
+    """
+    Persists an active web auth session into MongoDB web_sessions_col for 30-day persistence.
+    """
+    if not token:
+        return {}
+    from database import logs_col, web_sessions_col
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(seconds=expires_in)
+    try:
+        user_id_int = int(user_id)
+    except (ValueError, TypeError):
+        user_id_int = user_id
+    is_admin = bool(ADMIN_ID and user_id_int == ADMIN_ID)
+    session_data = {
+        "token": token,
+        "user_id": user_id_int,
+        "username": username or "",
+        "is_admin": is_admin,
+        "created_at": now.isoformat(),
+        "expires_at": expires_at,
+    }
+    if web_sessions_col is not None:
+        try:
+            await web_sessions_col.update_one(
+                {"token": token},
+                {"$set": session_data},
+                upsert=True
+            )
+            if logs_col is not None:
+                await logs_col.insert_one({
+                    "action": "web_session_created",
+                    "user_id": user_id,
+                    "username": username or "",
+                    "timestamp": now.isoformat(),
+                })
+        except Exception:
+            pass
+    return session_data
+
+
+async def get_web_session(token: str) -> dict | None:
+    """
+    Retrieves an active web auth session from MongoDB web_sessions_col if valid and not expired.
+    """
+    from database import web_sessions_col
+    if not token or web_sessions_col is None:
+        return None
+    try:
+        doc = await web_sessions_col.find_one({"token": token})
+        if not doc:
+            return None
+        exp = doc.get("expires_at")
+        if exp:
+            if isinstance(exp, str):
+                exp_dt = datetime.fromisoformat(exp)
+            elif isinstance(exp, datetime):
+                exp_dt = exp
+            else:
+                exp_dt = None
+            if exp_dt:
+                if exp_dt.tzinfo is None:
+                    exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) > exp_dt:
+                    await web_sessions_col.delete_one({"token": token})
+                    return None
+        user_id = doc["user_id"]
+        import config
+        curr_admin_id = getattr(config, "ADMIN_ID", 0)
+        is_admin = bool(curr_admin_id and user_id == curr_admin_id) if curr_admin_id else doc.get("is_admin", False)
+        return {
+            "user_id": user_id,
+            "username": doc.get("username", ""),
+            "is_admin": is_admin,
+        }
+    except Exception:
+        return None
+
+
+async def delete_web_session(token: str) -> bool:
+    """
+    Removes a web session from MongoDB web_sessions_col upon logout.
+    """
+    from database import web_sessions_col
+    if not token or web_sessions_col is None:
+        return False
+    try:
+        res = await web_sessions_col.delete_one({"token": token})
+        return res.deleted_count > 0
+    except Exception:
+        return False
+
 
 
 def verify_telegram_init_data(init_data: str, max_age: int = 86400) -> dict | None:
