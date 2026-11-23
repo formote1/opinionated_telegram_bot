@@ -67,8 +67,7 @@ def test_bot_web_command_pin_and_link():
 
     context = MagicMock()
 
-    with patch("handlers.common.save_user_info", new=AsyncMock()):
-        asyncio.run(web_command(update, context))
+    asyncio.run(web_command(update, context))
 
     assert update.message.reply_text.awaited
     call_args = update.message.reply_text.call_args

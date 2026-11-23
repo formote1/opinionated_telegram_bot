@@ -17,8 +17,7 @@ async def test_bot_web_command_generates_valid_link():
 
     context = MagicMock()
 
-    with patch("handlers.common.save_user_info", new=AsyncMock()):
-        await web_command(update, context)
+    await web_command(update, context)
 
     assert update.message.reply_text.awaited
     call_args = update.message.reply_text.call_args

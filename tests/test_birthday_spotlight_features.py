@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -112,7 +112,12 @@ async def test_list_reminders_sleek_layout_and_number_grid():
         },
     ]
 
-    with patch("handlers.reminders.reminders_col") as mock_col:
+    class MockDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 11, 15, 12, 0, tzinfo=tz or timezone.utc)
+
+    with patch("handlers.reminders.datetime", MockDateTime), patch("handlers.reminders.reminders_col") as mock_col:
         mock_cursor = MagicMock()
         mock_cursor.to_list = AsyncMock(return_value=reminders)
         mock_col.find.return_value.sort.return_value = mock_cursor

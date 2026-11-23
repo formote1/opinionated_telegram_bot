@@ -25,7 +25,7 @@ from telegram.ext import (
 
 from config import logger
 from database import reminders_col
-from utils.sentinel import log_event, notify_admin
+from utils.sentinel import notify_admin
 from utils.timezones import tf
 
 # Conversation States
@@ -1610,7 +1610,6 @@ async def finish_reminder(message, context):
         else:
             await message.reply_text(success_text, parse_mode="Markdown")
 
-        await log_event(user_id, "User", f"Set Reminder: {data['label']} [{category}]")
         await notify_admin(context, f"📅 User `{user_id}` armed a [{category}] reminder for `{data['label']}`.")
         context.user_data.clear()
         return ConversationHandler.END

@@ -1258,7 +1258,6 @@ def api_media_unlock():
     """Unlocks a password-protected media partition for the user."""
     user = get_current_user()
     user_id = user['user_id']
-    username = user.get('username', '')
     payload = request.get_json(force=True, silent=True) or {}
     prefix = str(payload.get('prefix', '')).strip().upper()
     passkey = str(payload.get('passkey', '')).strip()
@@ -1305,7 +1304,6 @@ def api_media_unlock():
                 },
                 upsert=True
             )
-        await log_event(user_id, username, f"Web Unlocked: {prefix}")
         return "success"
 
     try:
@@ -1434,6 +1432,20 @@ def api_admin_stats():
         k_task = group_keys_col.count_documents({}) if group_keys_col is not None else asyncio.sleep(0, result=0)
         u_task = users_col.count_documents({}) if users_col is not None else asyncio.sleep(0, result=0)
         r_c, c_c, l_c, k_c, u_c = await asyncio.gather(r_task, c_task, l_task, k_task, u_task)
+        if u_c == 0:
+            try:
+                user_ids = set()
+                for col in (reminders_col, unlocked_groups_col, web_sessions_col):
+                    if col is not None:
+                        res = await col.distinct("user_id")
+                        if isinstance(res, (list, set, tuple)):
+                            user_ids.update(res)
+                user_ids.discard(None)
+                user_ids.discard("")
+                if user_ids:
+                    u_c = len(user_ids)
+            except Exception:
+                pass
         return {
             "reminders": r_c,
             "assets": c_c,
@@ -1590,20 +1602,13 @@ def api_admin_access():
 @flask_app.route('/api/admin/logs', methods=['GET'])
 @admin_required
 def api_admin_logs():
-    """Returns the most recent system activity and sentinel logs."""
-    async def _fetch():
-        if logs_col is None:
-            return []
-        cursor = logs_col.find({}).sort("timestamp", -1).limit(50)
-        logs = await cursor.to_list(length=50)
-        return [serialize_doc(log_entry) for log_entry in logs]
-
-    try:
-        logs = run_async(_fetch())
-        return jsonify({"success": True, "logs": logs})
-    except Exception as e:
-        logger.error(f"Logs error: {e}")
-        return jsonify({"success": False, "error": "Failed to fetch logs."}), 500
+    """Returns the system logs status confirming Privacy Mode is active and zero user activity logs are recorded."""
+    return jsonify({
+        "success": True,
+        "privacy_mode": True,
+        "message": "Privacy Mode Active: Zero User Activity Logging. No user activity records are stored.",
+        "logs": []
+    })
 
 
 @flask_app.route('/api/admin/user/<action>', methods=['POST'])

@@ -1,4 +1,3 @@
-import asyncio
 import html
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
@@ -7,7 +6,6 @@ from telegram.ext import ContextTypes
 from config import ADMIN_ID, PORT, RENDER_URL
 from handlers.admin import admin_palette_msg
 from utils.auth import generate_auth_pin, generate_auth_token
-from utils.helpers import save_user_info
 
 
 async def web_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -15,7 +13,6 @@ async def web_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user or not update.message:
         return
-    asyncio.create_task(save_user_info(user))
     token = generate_auth_token(user.id, user.username)
     pin = generate_auth_pin(user.id, user.username)
     base_url = RENDER_URL.rstrip('/') if RENDER_URL else f"http://localhost:{PORT}"
@@ -56,7 +53,6 @@ async def web_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Greeting router for start and admin commands."""
     user = update.effective_user
-    asyncio.create_task(save_user_info(user))
     if user.id == ADMIN_ID:
         text, markup = await admin_palette_msg()
         await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")

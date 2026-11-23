@@ -29,7 +29,6 @@ from config import MONGO_URI, PORT, RENDER_URL, TOKEN, logger
 from database import (
     codes_col,
     group_keys_col,
-    logs_col,
     prefix_labels_col,
     reminders_col,
     unlocked_groups_col,
@@ -44,8 +43,8 @@ from handlers.admin import (
     handle_palette_callback,
     manage_db_gui,
     media_command_router,
+    monthly_system_logs_job,
     user_command_router,
-    weekly_backup_job,
 )
 
 # Modular Handlers
@@ -150,8 +149,6 @@ async def main():
 
     # Initialize MongoDB collections and complete index coverage for fast lookups
     try:
-        if logs_col is not None:
-            await logs_col.create_index("timestamp", expireAfterSeconds=604800)
         if users_col is not None:
             await users_col.create_index("user_id", unique=True)
             await users_col.create_index("username")
@@ -186,12 +183,12 @@ async def main():
     await application.initialize()
     await application.start()
 
-    # Schedule weekly automated database backup to Admin
+    # Schedule monthly aggregate system logs report to Admin (Zero PII)
     try:
         if application.job_queue:
-            application.job_queue.run_repeating(weekly_backup_job, interval=604800, first=86400)
+            application.job_queue.run_repeating(monthly_system_logs_job, interval=2592000, first=2592000)
     except Exception as e:
-        logger.warning(f"Backup job scheduling warning: {e}")
+        logger.warning(f"Monthly system logs job scheduling warning: {e}")
 
     # Load active reminders, rolling over recurring events and purging past-due one-offs
     try:

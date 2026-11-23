@@ -378,7 +378,7 @@
         <button onclick="setAdminSubTab('media_admin')" id="admin-sub-media_admin" class="admin-tab-btn px-3.5 py-1.5 rounded-xl bg-slate-900 text-slate-400 hover:text-white border border-white/5 text-xs font-medium transition">🎬 Media & TMDB</button>
         <button onclick="setAdminSubTab('keys')" id="admin-sub-keys" class="admin-tab-btn px-3.5 py-1.5 rounded-xl bg-slate-900 text-slate-400 hover:text-white border border-white/5 text-xs font-medium transition">🗝️ Key Matrix</button>
         <button onclick="setAdminSubTab('access')" id="admin-sub-access" class="admin-tab-btn px-3.5 py-1.5 rounded-xl bg-slate-900 text-slate-400 hover:text-white border border-white/5 text-xs font-medium transition">👥 Access Matrix</button>
-        <button onclick="setAdminSubTab('logs')" id="admin-sub-logs" class="admin-tab-btn px-3.5 py-1.5 rounded-xl bg-slate-900 text-slate-400 hover:text-white border border-white/5 text-xs font-medium transition">📋 Activity Logs</button>
+        <button onclick="setAdminSubTab('logs')" id="admin-sub-logs" class="admin-tab-btn px-3.5 py-1.5 rounded-xl bg-slate-900 text-slate-400 hover:text-white border border-white/5 text-xs font-medium transition">📋 System Logs</button>
       </div>
 
       <!-- SUBVIEW: FILES & PARTITIONS -->
@@ -653,7 +653,7 @@
 
       <!-- SUBVIEW: SYSTEM LOGS -->
       <div id="admin-view-logs" class="admin-view hidden space-y-4">
-        <h3 class="font-bold text-base text-white">Live Activity & Sentinel Stream</h3>
+        <h3 class="font-bold text-base text-white">System Logs & Privacy Status</h3>
         <div class="glass-card rounded-2xl p-4 overflow-hidden border border-white/10 font-mono-custom text-xs">
           <div id="admin-logs-container" class="space-y-1.5 max-h-[500px] overflow-y-auto">
             <!-- Injected via JS -->
@@ -2356,7 +2356,20 @@
         const res = await authFetch('/api/admin/logs');
         const data = await res.json();
         const container = document.getElementById('admin-logs-container');
-        if (data.success) {
+        if (data.privacy_mode || (data.logs && data.logs.length === 0)) {
+          container.innerHTML = `
+            <div class="p-4 rounded-xl bg-emerald-950/40 border border-emerald-500/20 text-emerald-300 flex items-start gap-3">
+              <span class="text-xl">🔒</span>
+              <div class="space-y-1 font-sans">
+                <div class="font-bold text-sm text-emerald-200">Privacy Mode Active</div>
+                <div class="text-xs text-emerald-400/80">Zero user activity logs are recorded or stored on this server.</div>
+                <div class="text-[11px] text-slate-400 mt-2">Aggregate system metrics (total assets, reminders, user count) are compiled monthly with zero personal identifiers.</div>
+              </div>
+            </div>
+          `;
+          return;
+        }
+        if (data.success && data.logs) {
           container.innerHTML = data.logs.map(l => `
             <div class="p-2 rounded-lg bg-slate-950/60 border border-white/5 flex items-center justify-between text-slate-300">
               <div class="flex items-center gap-2">

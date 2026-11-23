@@ -130,7 +130,7 @@ async def save_web_session(token: str, user_id: int, username: str | None = None
     """
     if not token:
         return {}
-    from database import logs_col, web_sessions_col
+    from database import web_sessions_col
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(seconds=expires_in)
     try:
@@ -153,13 +153,6 @@ async def save_web_session(token: str, user_id: int, username: str | None = None
                 {"$set": session_data},
                 upsert=True
             )
-            if logs_col is not None:
-                await logs_col.insert_one({
-                    "action": "web_session_created",
-                    "user_id": user_id,
-                    "username": username or "",
-                    "timestamp": now.isoformat(),
-                })
         except Exception:
             pass
     return session_data

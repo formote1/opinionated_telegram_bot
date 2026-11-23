@@ -4,7 +4,7 @@ import io
 import json
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from pymongo import UpdateOne
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -19,6 +19,7 @@ from database import (
     reminders_col,
     unlocked_groups_col,
     users_col,
+    web_sessions_col,
 )
 from services.access import invalidate_group_keys_cache
 from services.tmdb import fetch_tmdb_metadata
@@ -39,11 +40,33 @@ def parse_duration(d_str: str) -> float | None:
     return None
 
 
+async def get_total_users_count() -> int:
+    """Calculates total unique users across functional collections with zero PII exposure."""
+    user_ids = set()
+    for col in (users_col, reminders_col, unlocked_groups_col, web_sessions_col):
+        if col is not None:
+            try:
+                res = await col.distinct("user_id")
+                if isinstance(res, (list, set, tuple)):
+                    user_ids.update(res)
+            except Exception:
+                pass
+    user_ids.discard(None)
+    user_ids.discard("")
+    count = len(user_ids)
+    if count == 0 and users_col is not None:
+        try:
+            count = await users_col.count_documents({})
+        except Exception:
+            count = 0
+    return count
+
+
 async def admin_palette_msg():
     keyboard = [
         [
             InlineKeyboardButton("📊 System Stats", callback_data="pal_stats"),
-            InlineKeyboardButton("📦 Export Data", callback_data="pal_export")
+            InlineKeyboardButton("📦 Export System Logs", callback_data="pal_export")
         ],
         [
             InlineKeyboardButton("📜 All Reminders", callback_data="pal_alllists"),
@@ -110,9 +133,9 @@ async def admin_palette_msg():
         "• <code>/get PREFIX START END</code> - Sequential range delivery\n"
         "</blockquote>\n\n"
         "<blockquote expandable>\n"
-        "<b>Monitoring & Backup:</b>\n"
+        "<b>Monitoring & System Logs:</b>\n"
         "• <code>/stats</code> - Live system audit report\n"
-        "• <code>/export</code> - Database JSON backup\n"
+        "• <code>/export</code> - Monthly system logs report (Zero PII)\n"
         "</blockquote>\n"
         "───────────────────────"
     )
@@ -181,7 +204,7 @@ async def show_admin_reminders_menu(update: Update, context: ContextTypes.DEFAUL
         "• `/list` — View and manage active reminders\n"
         "• 🎂 **Birthday Engine:** Consolidates all birthdays into a single daily digest\n"
         "• 🔔 **Other Categories:** Dispatches segregated notifications by category\n"
-        "• 📦 Automated weekly JSON database backups sent directly to admin\n"
+        "• 📊 Automated monthly system_logs aggregate report sent directly to admin\n"
         "─────────────────────────────────"
     )
     keyboard = [
@@ -200,13 +223,13 @@ async def show_admin_system_menu(update: Update, context: ContextTypes.DEFAULT_T
         "─────────────────────────────────\n"
         "**Available Commands:**\n"
         "• `/stats` — Live system audit report\n"
-        "• `/export` — Database JSON snapshot backup\n"
-        "• Automated 7-day TTL auto-pruning active for activity logs\n"
+        "• `/export` — Monthly aggregate system logs report (Zero PII)\n"
+        "• 🔒 Privacy Mode Active: Zero user activity logs stored\n"
         "─────────────────────────────────"
     )
     keyboard = [
-        [InlineKeyboardButton("📊 System Stats", callback_data="pal_stats"), InlineKeyboardButton("📦 Export JSON Backup", callback_data="pal_export")],
-        [InlineKeyboardButton("📋 Activity Logs", callback_data="pal_logs")],
+        [InlineKeyboardButton("📊 System Stats", callback_data="pal_stats"), InlineKeyboardButton("📦 Export System Logs", callback_data="pal_export")],
+        [InlineKeyboardButton("📋 System Logs", callback_data="pal_logs")],
         [InlineKeyboardButton("🔙 Back to Main Console", callback_data="pal_home")]
     ]
     if update.callback_query:
@@ -267,6 +290,8 @@ async def get_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         u_task = users_col.count_documents({}) if users_col is not None else asyncio.sleep(0, result=0)
 
         r_c, c_c, l_c, k_c, u_c = await asyncio.gather(r_task, c_task, l_task, k_task, u_task)
+        if u_c == 0:
+            u_c = await get_total_users_count()
 
         msg = (
             "📊 **SYSTEM AUDIT REPORT**\n"
@@ -274,10 +299,9 @@ async def get_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📅 **Total Reminders:** `{r_c:03d}`\n"
             f"🔑 **Indexed Assets:** `{c_c:03d}`\n"
             f"🔐 **Locked Prefixes:** `{k_c:03d}`\n"
-            f"📋 **Stored Logs:** `{l_c:03d}`\n"
             f"👤 **Unique Users:** `{u_c:03d}`\n"
             "───────────────────\n"
-            "*Auto-cleaning active: Logs purge every 7 days.*"
+            "🔒 *Privacy Mode Active: Zero User Activity Logging.*"
         )
         await update.effective_message.reply_text(msg, parse_mode="Markdown")
     except Exception as e:
@@ -637,37 +661,61 @@ async def get_key_matrix(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def get_system_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if logs_col is None: return
-    try:
-        cursor = logs_col.find({}).sort("timestamp", -1).limit(20)
-        logs = await cursor.to_list(length=20)
-        if not logs:
-            return await update.effective_message.reply_text("📋 Logs empty.")
-
-        report = ["📋 <b>SYSTEM ACTIVITY LOGS</b>\n"]
-        for log_entry in logs:
-            time_str = log_entry['timestamp'].strftime('%H:%M:%S')
-            user = html.escape(str(log_entry.get('username', 'Unknown')))
-            action = html.escape(str(log_entry.get('action', 'Unknown')))
-            report.append(f"<code>[{time_str}]</code> {user}: {action}")
-
-        await update.effective_message.reply_text("\n".join(report), parse_mode="HTML")
-    except Exception as e:
-        logger.error(f"Error retrieving logs: {e}")
-        await update.effective_message.reply_text("❌ Failed to retrieve logs.")
+    if update.effective_user.id != ADMIN_ID:
+        return
+    text = (
+        "📋 <b>SYSTEM LOGS</b>\n"
+        "───────────────────\n"
+        "🔒 <b>Privacy Mode Active</b>\n"
+        "• Zero user activity logs are recorded or stored.\n"
+        "• Background tracking and user action logging decommissioned.\n"
+        "• Monthly aggregate system logs are sent automatically."
+    )
+    await update.effective_message.reply_text(text, parse_mode="HTML")
 
 
 async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID or reminders_col is None: return
+    if update.effective_user.id != ADMIN_ID:
+        return
     try:
-        cursor = reminders_col.find({})
-        data = await cursor.to_list(length=None)
-        for r in data: r['_id'] = str(r['_id'])
+        total_assets = 0
+        if codes_col is not None:
+            try:
+                total_assets = await codes_col.count_documents({})
+            except Exception as e:
+                logger.warning(f"Error counting assets for export: {e}")
 
-        file_bytes = io.BytesIO(json.dumps(data, indent=4).encode('utf-8'))
-        file_name = f"backup_{datetime.now().strftime('%Y%m%d')}.json"
+        total_reminders = 0
+        if reminders_col is not None:
+            try:
+                total_reminders = await reminders_col.count_documents({})
+            except Exception as e:
+                logger.warning(f"Error counting reminders for export: {e}")
+
+        total_users = await get_total_users_count()
+
+        now_utc = datetime.now(timezone.utc)
+        report_data = {
+            "report_type": "system_logs",
+            "period": "monthly",
+            "generated_at": now_utc.isoformat(),
+            "metrics": {
+                "total_assets": total_assets,
+                "total_reminders": total_reminders,
+                "total_users": total_users,
+            }
+        }
+        file_name = f"system_logs_{now_utc.strftime('%Y%m%d_%H%M%S')}.json"
+        file_bytes = io.BytesIO(json.dumps(report_data, indent=2).encode('utf-8'))
         file_bytes.name = file_name
-        await update.effective_message.reply_document(document=file_bytes, filename=file_name)
+        caption = (
+            f"📊 **System Logs (Monthly Summary)**\n"
+            f"• Assets: {total_assets}\n"
+            f"• Reminders: {total_reminders}\n"
+            f"• Total Users: {total_users}\n\n"
+            f"🔒 Privacy Mode: Zero User Logs Stored"
+        )
+        await update.effective_message.reply_document(document=file_bytes, filename=file_name, caption=caption, parse_mode="Markdown")
     except Exception as e:
         logger.error(f"Export Error: {e}")
         await update.effective_message.reply_text("❌ Failed to export data.")
@@ -1365,43 +1413,64 @@ async def refresh_metadata(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await notify_admin(context, f"📊 Metadata Sync complete. <code>{file_sync_count}</code> files and <code>{tmdb_sync_count}</code> TMDB records enriched.")
 
 
-async def weekly_backup_job(context: ContextTypes.DEFAULT_TYPE):
-    """Automated recurring job that exports database backup and sends directly to Admin on Telegram."""
-    if not ADMIN_ID: return
+async def monthly_system_logs_job(context: ContextTypes.DEFAULT_TYPE):
+    """Automated recurring job (monthly / 30-day interval) that exports zero-PII system aggregate metrics to Admin."""
+    if not ADMIN_ID or not context or not getattr(context, "bot", None):
+        return
     try:
-        r_t = reminders_col.find({}).to_list(length=None) if reminders_col is not None else asyncio.sleep(0, result=[])
-        c_t = codes_col.find({}).to_list(length=None) if codes_col is not None else asyncio.sleep(0, result=[])
-        p_t = prefix_labels_col.find({}).to_list(length=None) if prefix_labels_col is not None else asyncio.sleep(0, result=[])
-        g_t = group_keys_col.find({}).to_list(length=None) if group_keys_col is not None else asyncio.sleep(0, result=[])
-        u_t = unlocked_groups_col.find({}).to_list(length=None) if unlocked_groups_col is not None else asyncio.sleep(0, result=[])
+        total_assets = 0
+        if codes_col is not None:
+            try:
+                total_assets = await codes_col.count_documents({})
+            except Exception as e:
+                logger.warning(f"Error counting assets for monthly system_logs: {e}")
 
-        rems, codes, labels, keys, unlocked = await asyncio.gather(r_t, c_t, p_t, g_t, u_t)
-        backup_data = {
-            "created_at": datetime.now().isoformat(),
-            "reminders": rems,
-            "codes": codes,
-            "prefix_labels": labels,
-            "group_keys": keys,
-            "unlocked_groups": unlocked,
+        total_reminders = 0
+        if reminders_col is not None:
+            try:
+                total_reminders = await reminders_col.count_documents({})
+            except Exception as e:
+                logger.warning(f"Error counting reminders for monthly system_logs: {e}")
+
+        total_users = await get_total_users_count()
+
+        now_utc = datetime.now(timezone.utc)
+        report_data = {
+            "report_type": "system_logs",
+            "period": "monthly",
+            "generated_at": now_utc.isoformat(),
+            "metrics": {
+                "total_assets": total_assets,
+                "total_reminders": total_reminders,
+                "total_users": total_users,
+            }
         }
-        for col_items in backup_data.values():
-            if isinstance(col_items, list):
-                for item in col_items:
-                    if isinstance(item, dict) and "_id" in item:
-                        item["_id"] = str(item["_id"])
 
-        file_name = f"auto_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        file_bytes = io.BytesIO(json.dumps(backup_data, indent=2).encode('utf-8'))
+        file_name = f"system_logs_{now_utc.strftime('%Y%m%d_%H%M%S')}.json"
+        file_bytes = io.BytesIO(json.dumps(report_data, indent=2).encode('utf-8'))
         file_bytes.name = file_name
+
+        caption = (
+            f"📊 **System Logs (Monthly Summary)**\n"
+            f"• Assets: {total_assets}\n"
+            f"• Reminders: {total_reminders}\n"
+            f"• Total Users: {total_users}\n\n"
+            f"🔒 Privacy Mode: Zero User Logs Stored"
+        )
 
         await context.bot.send_document(
             chat_id=ADMIN_ID,
             document=file_bytes,
             filename=file_name,
-            caption=f"📦 **Automated Weekly Backup**\n📅 `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`\nAssets: `{len(codes)}` | Reminders: `{len(rems)}`",
+            caption=caption,
             parse_mode="Markdown"
         )
-        logger.info("Weekly automated database backup delivered to admin.")
+        logger.info("Monthly aggregate system logs report delivered to admin.")
     except Exception as e:
-        logger.error(f"Weekly automated backup failed: {e}")
+        logger.error(f"Monthly system logs job failed: {e}")
+
+
+# Retain backward-compatible alias
+weekly_backup_job = monthly_system_logs_job
+
 

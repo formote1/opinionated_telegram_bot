@@ -1,5 +1,3 @@
-from datetime import datetime, timezone
-
 from telegram.ext import ContextTypes
 
 from config import logger
@@ -17,22 +15,19 @@ def extract_file_data(message):
     return None, None, None, None
 
 async def save_user_info(user, location=None):
-    """Saves or updates basic user info without persisting raw GPS coordinates."""
-    if users_col is None: return
+    """Privacy Mode: Profile scraping decommissioned. Does not store first_name, last_name, or last_seen."""
+    if users_col is None or user is None:
+        return
     try:
-        update_data = {
-            "username": user.username,
-            "first_name": user.first_name,
-            "last_name": user.last_name,
-            "last_seen": datetime.now(timezone.utc)
-        }
-        await users_col.update_one(
-            {"user_id": user.id},
-            {"$set": update_data},
-            upsert=True
-        )
+        uid = getattr(user, "id", None) or (user.get("id") if isinstance(user, dict) else user)
+        if uid:
+            await users_col.update_one(
+                {"user_id": uid},
+                {"$setOnInsert": {"user_id": uid}},
+                upsert=True
+            )
     except Exception as e:
-        logger.error(f"Error saving user info: {e}")
+        logger.debug(f"User registration error: {e}")
 
 async def delete_msg_callback(context: ContextTypes.DEFAULT_TYPE):
     """Callback triggered by JobQueue to delete ephemeral copyright messages (supports single or batch)."""
