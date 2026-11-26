@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import weakref
 from datetime import datetime, timedelta, timezone
 
@@ -25,7 +26,7 @@ def _compat_set_application(self, application):
 
 JobQueue.set_application = _compat_set_application
 
-from config import MONGO_URI, PORT, RENDER_URL, TOKEN, logger
+from config import MONGO_URI, PORT, RENDER_URL, SECRET_KEY, TOKEN, logger
 from database import (
     codes_col,
     group_keys_col,
@@ -71,6 +72,7 @@ from handlers.reminders import (
 from server import init_server, start_server_daemon
 from services.ascii_art import ascii_command_handler
 from services.tmdb import close_tmdb_client
+from utils.privacy import public_id
 
 
 async def post_stop_cleanup(application):
@@ -138,7 +140,7 @@ def create_application():
 
 async def main():
     """Bot lifecycle orchestrator: initializes database, webhook server, and task queues."""
-    if not TOKEN or not MONGO_URI or not RENDER_URL:
+    if not TOKEN or not MONGO_URI or not RENDER_URL or not SECRET_KEY:
         main_loop = asyncio.get_running_loop()
         init_server(None, main_loop)
         start_server_daemon(port=PORT)
@@ -147,11 +149,28 @@ async def main():
 
     main_loop = asyncio.get_running_loop()
 
+    # One-time privacy migration: add pseudonyms and hash legacy bearer tokens at rest
+    try:
+        if users_col is not None:
+            async for u in users_col.find({"public_id": {"$exists": False}}):
+                if u.get("user_id") is not None:
+                    await users_col.update_one({"_id": u["_id"]}, {"$set": {"public_id": public_id(u["user_id"])}})
+        if web_sessions_col is not None:
+            async for s in web_sessions_col.find({"token": {"$exists": True}}):
+                token = s.get("token")
+                if token:
+                    await web_sessions_col.update_one(
+                        {"_id": s["_id"]},
+                        {"$set": {"token_hash": hashlib.sha256(token.encode("utf-8")).hexdigest()}, "$unset": {"token": ""}},
+                    )
+    except Exception as e:
+        logger.warning(f"Privacy migration warning: {type(e).__name__}")
+
     # Initialize MongoDB collections and complete index coverage for fast lookups
     try:
         if users_col is not None:
             await users_col.create_index("user_id", unique=True)
-            await users_col.create_index("username")
+            await users_col.create_index("public_id", unique=True, sparse=True)
         if codes_col is not None:
             await codes_col.create_index("code", unique=True)
             await codes_col.create_index("file_name")
@@ -168,13 +187,13 @@ async def main():
         if reminders_col is not None:
             await reminders_col.create_index([("user_id", 1), ("target_date", 1)])
         if web_sessions_col is not None:
-            await web_sessions_col.create_index("token", unique=True)
+            await web_sessions_col.create_index("token_hash", unique=True, sparse=True)
             try:
                 await web_sessions_col.create_index("expires_at", expireAfterSeconds=0)
             except Exception:
                 await web_sessions_col.create_index("expires_at")
     except Exception as e:
-        logger.warning(f"Index creation warning: {e}")
+        logger.warning("Index creation warning: %s", type(e).__name__)
 
 
     # Build and start Telegram Application
@@ -188,7 +207,7 @@ async def main():
         if application.job_queue:
             application.job_queue.run_repeating(monthly_system_logs_job, interval=2592000, first=2592000)
     except Exception as e:
-        logger.warning(f"Monthly system logs job scheduling warning: {e}")
+        logger.warning("Monthly system logs job scheduling warning: %s", type(e).__name__)
 
     # Load active reminders, rolling over recurring events and purging past-due one-offs
     try:
@@ -228,13 +247,13 @@ async def main():
                 except Exception:
                     schedule_reminder_job(application, r)
     except Exception as e:
-        logger.warning(f"Reminder recovery warning: {e}")
+        logger.warning("Reminder recovery warning: %s", type(e).__name__)
 
     # Register Telegram webhook
     try:
         await application.bot.set_webhook(url=f"{RENDER_URL.rstrip('/')}/{TOKEN}")
     except Exception as e:
-        logger.warning(f"Webhook setup warning: {e}")
+        logger.warning("Webhook setup warning: %s", type(e).__name__)
 
     # Launch Flask Webhook & Health server in daemon thread
     start_server_daemon(port=PORT)

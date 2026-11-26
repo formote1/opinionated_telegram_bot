@@ -24,7 +24,8 @@ from database import (
 from services.access import invalidate_group_keys_cache
 from services.tmdb import fetch_tmdb_metadata
 from utils.helpers import extract_file_data
-from utils.sentinel import log_event, notify_admin
+from utils.privacy import is_public_id, public_id, resolve_public_id
+from utils.sentinel import log_event
 
 
 def parse_duration(d_str: str) -> float | None:
@@ -69,7 +70,6 @@ async def admin_palette_msg():
             InlineKeyboardButton("📦 Export System Logs", callback_data="pal_export")
         ],
         [
-            InlineKeyboardButton("📜 All Reminders", callback_data="pal_alllists"),
             InlineKeyboardButton("🗝️ Key Matrix", callback_data="pal_keys")
         ],
         [
@@ -97,12 +97,12 @@ async def admin_palette_msg():
         "</blockquote>\n\n"
         "<blockquote expandable>\n"
         "<b>Access Management:</b>\n"
-        "• <code>/user grant &lt;USER_ID|@username&gt; &lt;PREFIX|0&gt; [DURATION]</code>\n"
-        "• <code>/user revoke &lt;USER_ID|@username&gt; &lt;PREFIX|0&gt;</code>\n"
-        "• <code>/user freeze &lt;USER_ID|@username&gt; [PREFIX|0] [DURATION]</code>\n"
-        "• <code>/user unfreeze &lt;USER_ID|@username&gt; [PREFIX|0]</code>\n"
-        "• <code>/user ban &lt;USER_ID|@username&gt;</code>\n"
-        "• <code>/user unban &lt;USER_ID|@username&gt;</code>\n"
+        "• <code>/user grant &lt;PSEUDONYM&gt; &lt;PREFIX|0&gt; [DURATION]</code>\n"
+        "• <code>/user revoke &lt;PSEUDONYM&gt; &lt;PREFIX|0&gt;</code>\n"
+        "• <code>/user freeze &lt;PSEUDONYM&gt; [PREFIX|0] [DURATION]</code>\n"
+        "• <code>/user unfreeze &lt;PSEUDONYM&gt; [PREFIX|0]</code>\n"
+        "• <code>/user ban &lt;PSEUDONYM&gt;</code>\n"
+        "• <code>/user unban &lt;PSEUDONYM&gt;</code>\n"
         "</blockquote>\n\n"
         "<blockquote expandable>\n"
         "<b>File Storage Engine:</b>\n"
@@ -177,12 +177,12 @@ async def show_admin_security_menu(update: Update, context: ContextTypes.DEFAULT
         "• <code>/file lock PREFIX PASSWORD</code> — Lock partition (0 = all unlocked)\n"
         "• <code>/file lock PREFIX OLD_PASS NEW_PASS</code> — Change/rotate passkey\n"
         "• <code>/file unlock PREFIX</code> — Remove passkey partition\n"
-        "• <code>/user grant &lt;USER_ID|@username&gt; &lt;PREFIX|0&gt; [DURATION]</code>\n"
-        "• <code>/user revoke &lt;USER_ID|@username&gt; &lt;PREFIX|0&gt;</code>\n"
-        "• <code>/user freeze &lt;USER_ID|@username&gt; [PREFIX|0] [DURATION]</code>\n"
-        "• <code>/user unfreeze &lt;USER_ID|@username&gt; [PREFIX|0]</code>\n"
-        "• <code>/user ban &lt;USER_ID|@username&gt;</code>\n"
-        "• <code>/user unban &lt;USER_ID|@username&gt;</code>\n"
+        "• <code>/user grant &lt;PSEUDONYM&gt; &lt;PREFIX|0&gt; [DURATION]</code>\n"
+        "• <code>/user revoke &lt;PSEUDONYM&gt; &lt;PREFIX|0&gt;</code>\n"
+        "• <code>/user freeze &lt;PSEUDONYM&gt; [PREFIX|0] [DURATION]</code>\n"
+        "• <code>/user unfreeze &lt;PSEUDONYM&gt; [PREFIX|0]</code>\n"
+        "• <code>/user ban &lt;PSEUDONYM&gt;</code>\n"
+        "• <code>/user unban &lt;PSEUDONYM&gt;</code>\n"
         "─────────────────────────────────"
     )
     keyboard = [
@@ -205,10 +205,10 @@ async def show_admin_reminders_menu(update: Update, context: ContextTypes.DEFAUL
         "• 🎂 **Birthday Engine:** Consolidates all birthdays into a single daily digest\n"
         "• 🔔 **Other Categories:** Dispatches segregated notifications by category\n"
         "• 📊 Automated monthly system_logs aggregate report sent directly to admin\n"
+        "• 🔒 User reminders are private: no admin audit of labels, dates, or birthdays\n"
         "─────────────────────────────────"
     )
     keyboard = [
-        [InlineKeyboardButton("📜 Global Reminders Audit", callback_data="pal_alllists")],
         [InlineKeyboardButton("🔙 Back to Main Console", callback_data="pal_home")]
     ]
     if update.callback_query:
@@ -265,8 +265,6 @@ async def handle_palette_callback(update: Update, context: ContextTypes.DEFAULT_
         await get_access_matrix(update, context)
     elif action == "export":
         await export_data(update, context)
-    elif action == "alllists":
-        await get_all_lists(update, context)
     elif action == "keys":
         await get_key_matrix(update, context)
     elif action == "logs":
@@ -305,7 +303,7 @@ async def get_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.effective_message.reply_text(msg, parse_mode="Markdown")
     except Exception as e:
-        logger.error(f"Stats Error: {e}")
+        logger.error("Stats Error: %s", type(e).__name__)
         await update.effective_message.reply_text("❌ Failed to retrieve stats.")
 
 
@@ -319,18 +317,11 @@ async def get_access_matrix(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return await update.effective_message.reply_text("👥 No users currently have access to locked media.")
 
         # Batch fetch all user profiles in a single query to eliminate N+1 latency
-        u_ids = [u.get("user_id") for u in users_access if u.get("user_id")]
-        users_map = {}
-        if users_col is not None and u_ids:
-            async for u_doc in users_col.find({"user_id": {"$in": u_ids}}):
-                users_map[u_doc["user_id"]] = u_doc
-
         report = ["👥 <b>MEDIA ACCESS MATRIX</b>\n"]
         now = time.time()
         for u in users_access:
             u_id = u.get("user_id")
-            u_info = users_map.get(u_id)
-            uname = f"@{u_info.get('username')}" if u_info and u_info.get('username') else f"User {u_id}"
+            display = public_id(u_id) if u_id else "U1_unknown"
 
             unlocked = u.get("unlocked_prefixes", [])
             frozen = u.get("frozen_prefixes", [])
@@ -361,38 +352,30 @@ async def get_access_matrix(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         status = "🟢 ACTIVE (Permanent)"
                 prefix_statuses.append(f"{display_prefix}: {status}")
 
-            report.append(f"• <b>{html.escape(uname)}</b> (<code>{u_id}</code>):\n  " + ", ".join(prefix_statuses))
+            report.append(f"• <b>{display}</b>:\n  " + ", ".join(prefix_statuses))
 
         report.append("\n<b>Admin Commands:</b>\n"
-                      "• <code>/user grant &lt;USER_ID|@username&gt; &lt;PREFIX|0&gt; [DURATION]</code>\n"
-                      "• <code>/user revoke &lt;USER_ID|@username&gt; &lt;PREFIX|0&gt;</code>\n"
-                      "• <code>/user freeze &lt;USER_ID|@username&gt; [PREFIX|0] [DURATION]</code>\n"
-                      "• <code>/user unfreeze &lt;USER_ID|@username&gt; [PREFIX|0]</code>\n"
-                      "• <code>/user ban &lt;USER_ID|@username&gt;</code>")
+                      "• <code>/user grant &lt;PSEUDONYM&gt; &lt;PREFIX|0&gt; [DURATION]</code>\n"
+                      "• <code>/user revoke &lt;PSEUDONYM&gt; &lt;PREFIX|0&gt;</code>\n"
+                      "• <code>/user freeze &lt;PSEUDONYM&gt; [PREFIX|0] [DURATION]</code>\n"
+                      "• <code>/user unfreeze &lt;PSEUDONYM&gt; [PREFIX|0]</code>\n"
+                      "• <code>/user ban &lt;PSEUDONYM&gt;</code>")
 
         await update.effective_message.reply_text("\n".join(report), parse_mode="HTML")
     except Exception as e:
-        logger.error(f"Access Matrix error: {e}")
+        logger.error("Access Matrix error: %s", type(e).__name__)
         await update.effective_message.reply_text("❌ Failed to retrieve access matrix.")
 
 
 async def resolve_target_user(identifier: str) -> tuple[int | None, str]:
-    """Resolves a numeric user ID or @username into (user_id, display_name)."""
-    identifier = identifier.strip()
-    if identifier.startswith("@"):
-        uname = identifier[1:]
-        if users_col is not None:
-            doc = await users_col.find_one({"username": uname})
-            if not doc:
-                doc = await users_col.find_one({"username": {"$regex": f"^{re.escape(uname)}$", "$options": "i"}})
-            if doc:
-                return doc.get("user_id"), f"@{doc.get('username')}"
-        return None, identifier
+    """Resolves a U1_ pseudonym into the internal delivery ID. Numeric IDs remain a legacy input but are never displayed."""
+    identifier = str(identifier).strip()
+    if is_public_id(identifier):
+        uid = await resolve_public_id(identifier)
+        return uid, identifier
     if identifier.isdigit():
         uid = int(identifier)
-        doc = await users_col.find_one({"user_id": uid}) if users_col is not None else None
-        uname = f"@{doc['username']}" if (doc and doc.get("username")) else f"User {uid}"
-        return uid, uname
+        return uid, public_id(uid)
     return None, identifier
 
 
@@ -404,12 +387,12 @@ async def user_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not args:
         help_text = (
             "👤 <b>USER ACCESS MANAGEMENT</b>\n\n"
-            "• <code>/user grant &lt;USER_ID|@username&gt; &lt;PREFIX|0&gt; [DURATION]</code>\n"
-            "• <code>/user revoke &lt;USER_ID|@username&gt; &lt;PREFIX|0&gt;</code>\n"
-            "• <code>/user freeze &lt;USER_ID|@username&gt; [PREFIX|0] [DURATION]</code>\n"
-            "• <code>/user unfreeze &lt;USER_ID|@username&gt; [PREFIX|0]</code>\n"
-            "• <code>/user ban &lt;USER_ID|@username&gt;</code>\n"
-            "• <code>/user unban &lt;USER_ID|@username&gt;</code>\n\n"
+            "• <code>/user grant &lt;PSEUDONYM&gt; &lt;PREFIX|0&gt; [DURATION]</code>\n"
+            "• <code>/user revoke &lt;PSEUDONYM&gt; &lt;PREFIX|0&gt;</code>\n"
+            "• <code>/user freeze &lt;PSEUDONYM&gt; [PREFIX|0] [DURATION]</code>\n"
+            "• <code>/user unfreeze &lt;PSEUDONYM&gt; [PREFIX|0]</code>\n"
+            "• <code>/user ban &lt;PSEUDONYM&gt;</code>\n"
+            "• <code>/user unban &lt;PSEUDONYM&gt;</code>\n\n"
             "<i>Note: Passing 0 targets all locked partitions.</i>"
         )
         return await update.message.reply_text(help_text, parse_mode="HTML")
@@ -423,7 +406,7 @@ async def user_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if sub == "grant":
         if len(args) < 3:
-            return await update.message.reply_text("❌ Usage: <code>/user grant &lt;USER_ID|@username&gt; &lt;PREFIX|0&gt; [DURATION]</code>", parse_mode="HTML")
+            return await update.message.reply_text("❌ Usage: <code>/user grant &lt;PSEUDONYM&gt; &lt;PREFIX|0&gt; [DURATION]</code>", parse_mode="HTML")
         uid, uname = await resolve_target_user(args[1])
         if not uid:
             return await update.message.reply_text(f"❌ User <code>{args[1]}</code> not found in database.", parse_mode="HTML")
@@ -448,7 +431,6 @@ async def user_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE
             await unlocked_groups_col.update_one({"user_id": uid}, update_op, upsert=True)
             await update.message.reply_text(f"✅ Granted access to <b>ALL locked partitions</b> ({len(keys_to_add)}) for {uname} ({duration_note}).", parse_mode="HTML")
             await log_event(ADMIN_ID, "ADMIN", f"Granted ALL to {uid} ({duration_note})")
-            await notify_admin(context, f"👥 Granted ALL partitions to {uname} ({duration_note}).")
         else:
             pfx = target_prefix[:3]
             gate = await group_keys_col.find_one({"prefix": pfx}) if group_keys_col is not None else None
@@ -463,11 +445,10 @@ async def user_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE
             await unlocked_groups_col.update_one({"user_id": uid}, update_op, upsert=True)
             await update.message.reply_text(f"✅ Granted access to <code>{pfx}</code> for {uname} ({duration_note}).", parse_mode="HTML")
             await log_event(ADMIN_ID, "ADMIN", f"Granted {pfx} to {uid} ({duration_note})")
-            await notify_admin(context, f"👥 Granted `{pfx}` to {uname} ({duration_note}).")
 
     elif sub == "revoke":
         if len(args) < 3:
-            return await update.message.reply_text("❌ Usage: <code>/user revoke &lt;USER_ID|@username&gt; &lt;PREFIX|0&gt;</code>", parse_mode="HTML")
+            return await update.message.reply_text("❌ Usage: <code>/user revoke &lt;PSEUDONYM&gt; &lt;PREFIX|0&gt;</code>", parse_mode="HTML")
         uid, uname = await resolve_target_user(args[1])
         if not uid:
             return await update.message.reply_text(f"❌ User <code>{args[1]}</code> not found.", parse_mode="HTML")
@@ -501,11 +482,10 @@ async def user_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE
         target_desc = "ALL partitions" if target_prefix == "0" else f"<code>{target_prefix[:3]}</code>"
         await update.message.reply_text(f"🗑️ Revoked access to {target_desc} for {uname}.", parse_mode="HTML")
         await log_event(ADMIN_ID, "ADMIN", f"Revoked {target_prefix} from {uid}")
-        await notify_admin(context, f"👥 Revoked {target_desc} from {uname}.")
 
     elif sub == "freeze":
         if len(args) < 2:
-            return await update.message.reply_text("❌ Usage: <code>/user freeze &lt;USER_ID|@username&gt; [PREFIX|0] [DURATION]</code>", parse_mode="HTML")
+            return await update.message.reply_text("❌ Usage: <code>/user freeze &lt;PSEUDONYM&gt; [PREFIX|0] [DURATION]</code>", parse_mode="HTML")
         uid, uname = await resolve_target_user(args[1])
         if not uid:
             return await update.message.reply_text(f"❌ User <code>{args[1]}</code> not found.", parse_mode="HTML")
@@ -547,11 +527,10 @@ async def user_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE
         target_desc = "ALL partitions" if target_prefix == "0" else f"<code>{target_prefix[:3]}</code>"
         await update.message.reply_text(f"❄️ Froze access to {target_desc} for {uname} ({duration_note}).", parse_mode="HTML")
         await log_event(ADMIN_ID, "ADMIN", f"Froze {target_prefix} for {uid} ({duration_note})")
-        await notify_admin(context, f"❄️ Froze {target_desc} for {uname} ({duration_note}).")
 
     elif sub == "unfreeze":
         if len(args) < 2:
-            return await update.message.reply_text("❌ Usage: <code>/user unfreeze &lt;USER_ID|@username&gt; [PREFIX|0]</code>", parse_mode="HTML")
+            return await update.message.reply_text("❌ Usage: <code>/user unfreeze &lt;PSEUDONYM&gt; [PREFIX|0]</code>", parse_mode="HTML")
         uid, uname = await resolve_target_user(args[1])
         if not uid:
             return await update.message.reply_text(f"❌ User <code>{args[1]}</code> not found.", parse_mode="HTML")
@@ -581,48 +560,28 @@ async def user_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE
         target_desc = "ALL partitions" if target_prefix == "0" else f"<code>{target_prefix[:3]}</code>"
         await update.message.reply_text(f"✅ Unfroze access to {target_desc} for {uname}.", parse_mode="HTML")
         await log_event(ADMIN_ID, "ADMIN", f"Unfroze {target_prefix} for {uid}")
-        await notify_admin(context, f"✅ Unfroze {target_desc} for {uname}.")
 
     elif sub == "ban":
         if len(args) < 2:
-            return await update.message.reply_text("❌ Usage: <code>/user ban &lt;USER_ID|@username&gt;</code>", parse_mode="HTML")
+            return await update.message.reply_text("❌ Usage: <code>/user ban &lt;PSEUDONYM&gt;</code>", parse_mode="HTML")
         uid, uname = await resolve_target_user(args[1])
         if not uid:
             return await update.message.reply_text(f"❌ User <code>{args[1]}</code> not found.", parse_mode="HTML")
         await unlocked_groups_col.update_one({"user_id": uid}, {"$set": {"is_banned": True}}, upsert=True)
-        await update.message.reply_text(f"🚫 <b>User Banned:</b> {uname} (<code>{uid}</code>) is now blocked.", parse_mode="HTML")
+        await update.message.reply_text(f"🚫 <b>User Banned:</b> {uname} is now blocked.", parse_mode="HTML")
         await log_event(ADMIN_ID, "ADMIN", f"Banned user {uid}")
-        await notify_admin(context, f"🚫 Admin banned {uname} ({uid}).")
 
     elif sub == "unban":
         if len(args) < 2:
-            return await update.message.reply_text("❌ Usage: <code>/user unban &lt;USER_ID|@username&gt;</code>", parse_mode="HTML")
+            return await update.message.reply_text("❌ Usage: <code>/user unban &lt;PSEUDONYM&gt;</code>", parse_mode="HTML")
         uid, uname = await resolve_target_user(args[1])
         if not uid:
             return await update.message.reply_text(f"❌ User <code>{args[1]}</code> not found.", parse_mode="HTML")
         await unlocked_groups_col.update_one({"user_id": uid}, {"$set": {"is_banned": False}})
-        await update.message.reply_text(f"✅ <b>User Unbanned:</b> {uname} (<code>{uid}</code>) is unblocked.", parse_mode="HTML")
+        await update.message.reply_text(f"✅ <b>User Unbanned:</b> {uname} is unblocked.", parse_mode="HTML")
         await log_event(ADMIN_ID, "ADMIN", f"Unbanned user {uid}")
-        await notify_admin(context, f"✅ Admin unbanned {uname} ({uid}).")
     else:
         await update.message.reply_text(f"❌ Unknown /user action: <code>{sub}</code>", parse_mode="HTML")
-
-
-async def get_all_lists(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if reminders_col is None: return
-    try:
-        cursor = reminders_col.find({}).sort("user_id", 1)
-        reminders = await cursor.to_list(length=50)
-        if not reminders: return await update.effective_message.reply_text("📜 No active reminders.")
-        report = ["📜 <b>GLOBAL REMINDER AUDIT</b>\n"]
-        for r in reminders:
-            label = html.escape(str(r.get('label', 'No Label')))
-            rec = r.get('recurrence', 'once')
-            report.append(f"👤 <code>{r['user_id']}</code>: {label} ({r['target_date']}) [{rec}]")
-        await update.effective_message.reply_text("\n".join(report), parse_mode="HTML")
-    except Exception as e:
-        logger.error(f"Audit error: {e}")
-        await update.effective_message.reply_text("❌ Audit failed.")
 
 
 async def get_key_matrix(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -650,13 +609,13 @@ async def get_key_matrix(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for r in results:
             prefix, chat_id, count = r['_id']['prefix'], r['_id']['chat_id'], r['count']
             key_record = keys_map.get((chat_id, prefix)) or keys_map.get(prefix)
-            passkey = html.escape(key_record["secret_key"] if key_record else "NO KEY SET")
+            passkey = "SET" if key_record else "NOT SET"
             label_doc = labels_map.get(prefix)
             label_name = html.escape(label_doc.get("name", "Unlabeled")) if label_doc else "Unlabeled"
             report.append(f"• <code>{prefix}</code> - {count:02d} items  =&gt;  <b>{label_name}</b>  &lt;=  <code>{passkey}</code>")
         await update.effective_message.reply_text("\n".join(report), parse_mode="HTML")
     except Exception as e:
-        logger.error(f"Key Matrix error: {e}")
+        logger.error("Key Matrix error: %s", type(e).__name__)
         await update.effective_message.reply_text("❌ Key Matrix failed.")
 
 
@@ -683,14 +642,14 @@ async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 total_assets = await codes_col.count_documents({})
             except Exception as e:
-                logger.warning(f"Error counting assets for export: {e}")
+                logger.warning("Error counting assets for export: %s", type(e).__name__)
 
         total_reminders = 0
         if reminders_col is not None:
             try:
                 total_reminders = await reminders_col.count_documents({})
             except Exception as e:
-                logger.warning(f"Error counting reminders for export: {e}")
+                logger.warning("Error counting reminders for export: %s", type(e).__name__)
 
         total_users = await get_total_users_count()
 
@@ -717,7 +676,7 @@ async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.effective_message.reply_document(document=file_bytes, filename=file_name, caption=caption, parse_mode="Markdown")
     except Exception as e:
-        logger.error(f"Export Error: {e}")
+        logger.error("Export Error: %s", type(e).__name__)
         await update.effective_message.reply_text("❌ Failed to export data.")
 
 
@@ -750,10 +709,8 @@ async def handle_manage_callback(update: Update, context: ContextTypes.DEFAULT_T
         msg = f"🔥 **NUKE COMPLETE**\nPrefix `{prefix}` vaporized.\nAssets Deleted: `{res.deleted_count}/{count_to_wipe}`"
         await query.edit_message_text(msg, parse_mode="Markdown")
         await log_event(ADMIN_ID, "ADMIN", f"Nuke Success: {prefix}")
-        await notify_admin(context, f"☢️ Nuke triggered for `{prefix}`. `{res.deleted_count}` items erased.")
     except Exception as e:
         await query.edit_message_text(f"❌ **NUKE FAILED**: `{e}`", parse_mode="Markdown")
-        await notify_admin(context, f"🔴 NUKE FAILURE for `{prefix}`: {e}")
 
 
 async def file_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -806,7 +763,6 @@ async def file_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE
             await codes_col.update_one({"code": code_to_save}, {"$set": data}, upsert=True)
             await update.message.reply_text(f"✅ Indexed <code>{code_to_save}</code> (Type: {f_type})", parse_mode="HTML")
             await log_event(ADMIN_ID, "ADMIN", f"Indexed {code_to_save}")
-            await notify_admin(context, f"✅ Admin indexed <code>{code_to_save}</code>.")
         else:
             if len(args) < 4:
                 return await update.message.reply_text(
@@ -887,11 +843,9 @@ async def file_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE
 
                 await status_msg.edit_text(f"✅ <b>Bulk Indexing Complete!</b> Indexed <code>{indexed_count}</code> items for <code>{prefix}</code>.", parse_mode="HTML")
                 await log_event(ADMIN_ID, "ADMIN", f"Bulk save: {prefix} ({indexed_count} items)")
-                await notify_admin(context, f"📦 Bulk save success for <code>{prefix}</code> ({indexed_count} items).")
 
             except Exception as e:
                 await update.message.reply_text(f"❌ Error during bulk save: {e}", parse_mode="HTML")
-                await notify_admin(context, f"🔴 Bulk save failure: {e}")
 
     elif sub == "del":
         if len(args) == 2:
@@ -900,7 +854,6 @@ async def file_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE
             if res.deleted_count > 0:
                 await update.message.reply_text(f"🗑️ Vaporized <code>{code}</code>.", parse_mode="HTML")
                 await log_event(ADMIN_ID, "ADMIN", f"Single Del: {code}")
-                await notify_admin(context, f"🗑️ Admin deleted <code>{code}</code>.")
             else:
                 await update.message.reply_text(f"❌ <code>{code}</code> not found.", parse_mode="HTML")
         elif len(args) == 4:
@@ -914,7 +867,6 @@ async def file_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE
                 result = await codes_col.delete_many({"code": {"$in": target_codes}})
                 await update.message.reply_text(f"🗑️ Vaporized <code>{result.deleted_count}</code> items.", parse_mode="HTML")
                 await log_event(ADMIN_ID, "ADMIN", f"Range Del: {prefix}{start:03d}-{end:03d}")
-                await notify_admin(context, f"🗑️ Range Delete for <code>{prefix}</code> ({result.deleted_count} items).")
             except ValueError:
                 await update.message.reply_text("❌ START and END must be numbers.", parse_mode="HTML")
         else:
@@ -947,7 +899,6 @@ async def file_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE
                     invalidate_group_keys_cache()
                     await update.message.reply_text(f"🔑 <b>Password Updated!</b> Rotated passkey for <b>{res.modified_count}</b> partition(s).", parse_mode="HTML")
                     await log_event(ADMIN_ID, "ADMIN", f"Rotated passkey for {res.modified_count} partitions")
-                    await notify_admin(context, f"🔑 Rotated passkey for <b>{res.modified_count}</b> partitions.")
                 else:
                     await update.message.reply_text("❌ No locked partitions matched the provided OLD_PASSWORD.", parse_mode="HTML")
             else:
@@ -962,7 +913,6 @@ async def file_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE
                 invalidate_group_keys_cache(pfx)
                 await update.message.reply_text(f"🔑 <b>Password Changed!</b> Partition <code>{pfx}</code> passkey updated successfully.", parse_mode="HTML")
                 await log_event(ADMIN_ID, "ADMIN", f"Changed key for {pfx}")
-                await notify_admin(context, f"🔑 Passkey for partition <code>{pfx}</code> updated.")
 
         else:
             # /file lock PREFIX PASSWORD
@@ -1008,7 +958,6 @@ async def file_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE
                     parse_mode="HTML"
                 )
                 await log_event(ADMIN_ID, "ADMIN", f"Locked {len(unlocked_prefixes)} unlocked partitions")
-                await notify_admin(context, f"🔒 Locked {len(unlocked_prefixes)} previously unlocked partitions.")
             else:
                 pfx = target_prefix[:3]
                 if group_keys_col is not None:
@@ -1016,7 +965,6 @@ async def file_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE
                     invalidate_group_keys_cache(pfx)
                 await update.message.reply_text(f"🔒 Partition <code>{pfx}</code> locked with passkey!", parse_mode="HTML")
                 await log_event(ADMIN_ID, "ADMIN", f"Locked prefix: {pfx}")
-                await notify_admin(context, f"🔒 Access key set for <code>{pfx}</code>.")
 
     elif sub == "unlock":
         if len(args) < 2:
@@ -1028,7 +976,6 @@ async def file_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE
                 invalidate_group_keys_cache(prefix)
                 await update.message.reply_text(f"🔓 <b>Partition Removed!</b> Prefix <code>{prefix}</code> is now completely unlocked.", parse_mode="HTML")
                 await log_event(ADMIN_ID, "ADMIN", f"Unset Key: {prefix}")
-                await notify_admin(context, f"🔓 Admin removed password partition from <code>{prefix}</code>.")
             else:
                 await update.message.reply_text(f"ℹ️ Prefix <code>{prefix}</code> was not password-locked.", parse_mode="HTML")
 
@@ -1067,12 +1014,10 @@ async def file_command_router(update: Update, context: ContextTypes.DEFAULT_TYPE
 
             await status.edit_text(f"✅ <b>Migration Complete!</b>\nMoved <code>{count}</code> items from <code>{old_prefix}</code> to <code>{new_prefix}</code>.", parse_mode="HTML")
             await log_event(ADMIN_ID, "ADMIN", f"Rename Prefix: {old_prefix} -> {new_prefix} ({count} items)")
-            await notify_admin(context, f"🔄 Migrated <code>{old_prefix}</code> to <code>{new_prefix}</code> ({count} items).")
 
         except Exception as e:
-            logger.error(f"Rename error: {e}")
+            logger.error("Rename error: %s", type(e).__name__)
             await status.edit_text(f"❌ <b>Migration Failed:</b> {e}", parse_mode="HTML")
-            await notify_admin(context, f"🔴 RENAME FAILURE: {e}")
     else:
         await update.message.reply_text(f"❌ Unknown /file action: <code>{sub}</code>", parse_mode="HTML")
 
@@ -1118,7 +1063,6 @@ async def media_command_router(update: Update, context: ContextTypes.DEFAULT_TYP
                 parse_mode="HTML"
             )
             await log_event(ADMIN_ID, "ADMIN", f"Set Label: {prefix} -> {title} [{category}]")
-            await notify_admin(context, f"🏷️ Admin assigned label <code>{prefix}</code> ➔ {title} [{category}].")
         elif action == "del":
             if len(args) < 3:
                 return await update.message.reply_text("❌ Usage: <code>/media label del &lt;PREFIX&gt;</code>", parse_mode="HTML")
@@ -1137,7 +1081,6 @@ async def media_command_router(update: Update, context: ContextTypes.DEFAULT_TYP
                 parse_mode="HTML"
             )
             await log_event(ADMIN_ID, "ADMIN", f"Deleted label: {prefix}")
-            await notify_admin(context, f"🏷️ Admin removed title/category label from <code>{prefix}</code> ({asset_count} assets kept).")
         else:
             await update.message.reply_text("❌ Usage:\n• <code>/media label set &lt;PREFIX&gt; &lt;MOVIE|SERIES&gt; &lt;TITLE&gt;</code>\n• <code>/media label del &lt;PREFIX&gt;</code>", parse_mode="HTML")
 
@@ -1189,7 +1132,6 @@ async def media_command_router(update: Update, context: ContextTypes.DEFAULT_TYP
                 parse_mode="HTML"
             )
             await log_event(ADMIN_ID, "ADMIN", f"TMDB set for {prefix}: {tmdb_info['title']}")
-            await notify_admin(context, f"🎬 TMDB metadata linked to <code>{prefix}</code>: {tmdb_info['title']}.")
         elif action == "del":
             if len(args) < 3:
                 return await update.message.reply_text("❌ Usage: <code>/media tmdb del &lt;PREFIX&gt;</code>", parse_mode="HTML")
@@ -1198,7 +1140,6 @@ async def media_command_router(update: Update, context: ContextTypes.DEFAULT_TYP
             if res.modified_count > 0:
                 await update.message.reply_text(f"🗑️ Removed TMDB metadata from <code>{prefix}</code>.", parse_mode="HTML")
                 await log_event(ADMIN_ID, "ADMIN", f"Deleted TMDB for {prefix}")
-                await notify_admin(context, f"🎬 Admin cleared TMDB metadata from <code>{prefix}</code>.")
             else:
                 await update.message.reply_text(f"ℹ️ Prefix <code>{prefix}</code> had no TMDB metadata.", parse_mode="HTML")
         else:
@@ -1252,7 +1193,6 @@ async def media_command_router(update: Update, context: ContextTypes.DEFAULT_TYP
                 parse_mode="HTML"
             )
             await log_event(ADMIN_ID, "ADMIN", f"Banner toggled for {prefix}: {new_mode}")
-            await notify_admin(context, f"🖼️ Banner mode for <code>{prefix}</code> toggled to <b>{new_mode.upper()}</b>.")
         elif custom_url.lower() in ["reset", "del", "clear"]:
             await prefix_labels_col.update_one({"prefix": prefix}, {"$unset": {"custom_banner": ""}})
             await update.message.reply_text(f"🗑️ <b>Custom Banner Cleared!</b> Partition <code>{prefix}</code> reverted to TMDB banner.", parse_mode="HTML")
@@ -1267,7 +1207,6 @@ async def media_command_router(update: Update, context: ContextTypes.DEFAULT_TYP
                 disable_web_page_preview=False
             )
             await log_event(ADMIN_ID, "ADMIN", f"Custom banner set for {prefix}")
-            await notify_admin(context, f"🖼️ Custom banner set for <code>{prefix}</code>.")
         else:
             return await update.message.reply_text(
                 "❌ <b>Invalid banner option:</b>\n"
@@ -1361,7 +1300,7 @@ async def refresh_metadata(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         pass
                 await asyncio.sleep(0.5)
             except Exception as e:
-                logger.warning(f"File probe failed for {record.get('code')}: {e}")
+                logger.warning("File probe failed for: %s", type(e).__name__)
                 continue
 
     # 2. Refresh TMDB metadata ONLY for titles that have explicitly linked TMDB records
@@ -1410,7 +1349,6 @@ async def refresh_metadata(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await status_msg.edit_text("\n".join(summary_lines), parse_mode="HTML")
     await log_event(ADMIN_ID, "ADMIN", f"Metadata Sync: {file_sync_count} files, {tmdb_sync_count} TMDB records")
-    await notify_admin(context, f"📊 Metadata Sync complete. <code>{file_sync_count}</code> files and <code>{tmdb_sync_count}</code> TMDB records enriched.")
 
 
 async def monthly_system_logs_job(context: ContextTypes.DEFAULT_TYPE):
@@ -1423,14 +1361,14 @@ async def monthly_system_logs_job(context: ContextTypes.DEFAULT_TYPE):
             try:
                 total_assets = await codes_col.count_documents({})
             except Exception as e:
-                logger.warning(f"Error counting assets for monthly system_logs: {e}")
+                logger.warning("Error counting assets for monthly system_logs: %s", type(e).__name__)
 
         total_reminders = 0
         if reminders_col is not None:
             try:
                 total_reminders = await reminders_col.count_documents({})
             except Exception as e:
-                logger.warning(f"Error counting reminders for monthly system_logs: {e}")
+                logger.warning("Error counting reminders for monthly system_logs: %s", type(e).__name__)
 
         total_users = await get_total_users_count()
 
@@ -1467,7 +1405,7 @@ async def monthly_system_logs_job(context: ContextTypes.DEFAULT_TYPE):
         )
         logger.info("Monthly aggregate system logs report delivered to admin.")
     except Exception as e:
-        logger.error(f"Monthly system logs job failed: {e}")
+        logger.error("Monthly system logs job failed: %s", type(e).__name__)
 
 
 # Retain backward-compatible alias

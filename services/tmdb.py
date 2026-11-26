@@ -107,7 +107,7 @@ async def fetch_tmdb_metadata(title: str, category: str = "movie") -> dict | Non
             if response.status_code == 200:
                 return response.json()
         except Exception as e:
-            logger.warning(f"TMDB request failed for {url}: {e}")
+            logger.warning("TMDB request failed for: %s", type(e).__name__)
         return None
 
     def _format_item(item: dict, fallback_title: str) -> dict:
@@ -218,7 +218,7 @@ async def fetch_tmdb_metadata(title: str, category: str = "movie") -> dict | Non
 
             return _format_item(first, raw_query)
         except Exception as e:
-            logger.warning(f"TMDB query search pipeline error for '{title}': {e}")
+            logger.warning("TMDB query search pipeline error for '': %s", type(e).__name__)
             return None
 
     global _last_tmdb_prune

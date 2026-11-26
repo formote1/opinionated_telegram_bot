@@ -2,6 +2,7 @@ from telegram.ext import ContextTypes
 
 from config import logger
 from database import users_col
+from utils.privacy import public_id
 
 
 def extract_file_data(message):
@@ -23,11 +24,11 @@ async def save_user_info(user, location=None):
         if uid:
             await users_col.update_one(
                 {"user_id": uid},
-                {"$setOnInsert": {"user_id": uid}},
+                {"$setOnInsert": {"user_id": uid}, "$set": {"public_id": public_id(uid)}},
                 upsert=True
             )
     except Exception as e:
-        logger.debug(f"User registration error: {e}")
+        logger.debug("User registration error: %s", type(e).__name__)
 
 async def delete_msg_callback(context: ContextTypes.DEFAULT_TYPE):
     """Callback triggered by JobQueue to delete ephemeral copyright messages (supports single or batch)."""
@@ -57,7 +58,7 @@ async def delete_msg_callback(context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
             else:
-                logger.debug(f"Ephemeral cleanup note: {e}")
+                logger.debug("Ephemeral cleanup note: %s", type(e).__name__)
         if len(msg_ids) > 1:
             await asyncio.sleep(0.05)
 

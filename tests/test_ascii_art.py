@@ -225,7 +225,7 @@ async def test_ascii_command_handler_inline_delivery():
 
     # Short word renders <= 52 line length and <= 3500 chars -> inline <pre>
     context.args = ["TEST"]
-    with patch("services.ascii_art.notify_admin", AsyncMock()):
+    with patch("services.ascii_art.notify_admin", AsyncMock(), create=True):
         await ascii_command_handler(update, context)
     message.reply_text.assert_awaited_once()
     assert "<pre><code>" in message.reply_text.call_args[0][0]
@@ -241,7 +241,7 @@ async def test_ascii_command_handler_document_delivery():
 
     # Wide/long text triggers file delivery
     context.args = ["slant", "A very wide sentence that will definitely exceed fifty-two characters"]
-    with patch("services.ascii_art.notify_admin", AsyncMock()):
+    with patch("services.ascii_art.notify_admin", AsyncMock(), create=True):
         await ascii_command_handler(update, context)
     message.reply_document.assert_awaited_once()
     assert message.reply_document.call_args[1]["filename"].startswith("ascii_")
@@ -285,7 +285,7 @@ async def test_ascii_command_handler_error_handling():
 
     context.args = ["Hello"]
     with patch("services.ascii_art.async_generate_ascii_art", side_effect=RuntimeError("Test crash")), \
-         patch("services.ascii_art.notify_admin", AsyncMock()):
+         patch("services.ascii_art.notify_admin", AsyncMock(), create=True):
         await ascii_command_handler(update, context)
     assert "Failed to generate ASCII" in message.reply_text.call_args[0][0]
 
@@ -302,7 +302,7 @@ async def test_ascii_command_handler_context_args_none():
 
     # context.args is None (like in MessageHandler)
     context.args = None
-    with patch("services.ascii_art.notify_admin", AsyncMock()):
+    with patch("services.ascii_art.notify_admin", AsyncMock(), create=True):
         await ascii_command_handler(update, context)
     # Should successfully process and either reply_text or reply_document
     assert message.reply_text.called or message.reply_document.called
@@ -376,7 +376,7 @@ async def test_ascii_command_handler_multiline_raw_text():
     update.effective_user = MagicMock(id=123, username="tester")
     context.args = None
 
-    with patch("services.ascii_art.notify_admin", AsyncMock()):
+    with patch("services.ascii_art.notify_admin", AsyncMock(), create=True):
         await ascii_command_handler(update, context)
 
     assert message.reply_text.called or message.reply_document.called
@@ -395,7 +395,7 @@ async def test_ascii_command_handler_multiline_default_font():
     update.effective_user = MagicMock(id=123, username="tester")
     context.args = None
 
-    with patch("services.ascii_art.notify_admin", AsyncMock()):
+    with patch("services.ascii_art.notify_admin", AsyncMock(), create=True):
         await ascii_command_handler(update, context)
 
     assert message.reply_text.called or message.reply_document.called
@@ -412,7 +412,7 @@ async def test_ascii_command_handler_notification_failure_resilience():
     update.effective_user = MagicMock(id=123, username="tester")
     context.args = ["RESILIENT"]
 
-    with patch("services.ascii_art.notify_admin", AsyncMock(side_effect=RuntimeError("Admin unreachable"))):
+    with patch("services.ascii_art.notify_admin", AsyncMock(side_effect=RuntimeError("Admin unreachable")), create=True):
         await ascii_command_handler(update, context)
 
     assert message.reply_text.called or message.reply_document.called

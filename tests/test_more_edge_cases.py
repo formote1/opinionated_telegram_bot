@@ -112,13 +112,16 @@ def test_python_314_jobqueue_weakref_patch():
 @pytest.mark.asyncio
 async def test_resolve_target_user_indexed():
     from handlers.admin import resolve_target_user
-    with patch("handlers.admin.users_col") as mock_col:
-        mock_col.find_one = AsyncMock(return_value={"user_id": 7777, "username": "alice"})
-        uid, uname = await resolve_target_user("@alice")
+    from utils.privacy import public_id
+
+    alias = public_id(7777)
+    with patch("database.users_col") as mock_col:
+        mock_col.find_one = AsyncMock(return_value={"user_id": 7777, "public_id": alias})
+        uid, display = await resolve_target_user(alias)
         assert uid == 7777
-        assert uname == "@alice"
-        # Verify direct indexed query was issued
-        mock_col.find_one.assert_called_with({"username": "alice"})
+        assert display == alias
+        mock_col.find_one.assert_awaited_with({"public_id": alias})
+        assert await resolve_target_user("@alice") == (None, "@alice")
 
 
 def test_render_flf_text_multiline():

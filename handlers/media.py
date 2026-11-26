@@ -30,7 +30,6 @@ from services.access import (
 from services.ascii_art import ascii_command_handler
 from utils.helpers import delete_msg_callback
 from utils.rate_limiter import is_rate_limited
-from utils.sentinel import notify_admin
 
 
 async def browse_library(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -256,15 +255,13 @@ async def execute_file_delivery(chat_id, record, context, user, send_alert=True,
             else: msg = await context.bot.copy_message(chat_id, from_chat_id=record["chat_id"], message_id=record["message_id"], reply_markup=reply_markup)
         else: msg = await context.bot.copy_message(chat_id, from_chat_id=record["chat_id"], message_id=record["message_id"], reply_markup=reply_markup)
 
-        if log_fetch:
-            await notify_admin(context, f"📦 User `{user.id}` fetched `{record['code']}`.")
 
         if send_alert and msg:
             warn = await context.bot.send_message(chat_id, "⚠️File(s) are *EPHEMERAL*⚠️\n\nFile will be deleted in 3 minutes due to copyright.\n\nPlease forward it to your *Saved Messages* to download", parse_mode="Markdown")
             context.job_queue.run_once(delete_msg_callback, 180, data={"chat_id": chat_id, "message_ids": [msg.message_id, warn.message_id]})
         return msg
     except Exception as e:
-        logger.error(f"Delivery Error: {e}")
+        logger.error("Delivery Error: %s", type(e).__name__)
         return None
 
 
@@ -329,7 +326,6 @@ async def handle_library_delivery(update: Update, context: ContextTypes.DEFAULT_
             if m: delivered_ids.append(m.message_id)
             await asyncio.sleep(0.15)
         if delivered_ids:
-            await notify_admin(context, f"📦 User `{user.id}` fetched batch `{target}` ({len(delivered_ids)} items).")
             warn = await context.bot.send_message(chat_id, "⚠️File(s) are *EPHEMERAL*⚠️\n\nFile will be deleted in 3 minutes due to copyright.\n\nPlease forward it to your *Saved Messages* to download", parse_mode="Markdown")
             context.job_queue.run_once(delete_msg_callback, 180, data={"chat_id": chat_id, "message_ids": delivered_ids + [warn.message_id]})
     else:
@@ -431,7 +427,6 @@ async def get_file_command(update: Update, context: ContextTypes.DEFAULT_TYPE, f
             if msg: delivered_ids.append(msg.message_id)
             await asyncio.sleep(0.15)
         if delivered_ids:
-            await notify_admin(context, f"📦 User `{user.id}` fetched batch `{prefix_arg}` {start_num}-{end_num} ({len(delivered_ids)} items).")
             warn = await context.bot.send_message(chat_id, "⚠️File(s) are *EPHEMERAL*⚠️\n\nFile will be deleted in 3 minutes due to copyright.\n\nPlease forward it to your *Saved Messages* to download", parse_mode="Markdown")
             context.job_queue.run_once(delete_msg_callback, 180, data={"chat_id": chat_id, "message_ids": delivered_ids + [warn.message_id]})
 
@@ -496,20 +491,17 @@ async def core_routing_manager(update: Update, context: ContextTypes.DEFAULT_TYP
                     if m: delivered_ids.append(m.message_id)
                     await asyncio.sleep(0.15)
                 if delivered_ids:
-                    await notify_admin(context, f"📦 User `{user.id}` fetched unlocked batch ({len(delivered_ids)} items).")
                     warn = await context.bot.send_message(chat_id, "⚠️File(s) are *EPHEMERAL*⚠️\n\nFile will be deleted in 3 minutes due to copyright.\n\nPlease forward it to your *Saved Messages* to download", parse_mode="Markdown")
                     context.job_queue.run_once(delete_msg_callback, 180, data={"chat_id": chat_id, "message_ids": delivered_ids + [warn.message_id]})
 
         else:
             fails, just_locked = record_failed_attempt(user.id)
             if just_locked:
-                await notify_admin(context, f"🛡️ **SECURITY ALERT**: User `{user.id}` locked out for 1 hour after 5 failed password attempts on `{pending_prefix}`.")
                 await context.bot.send_message(chat_id, f"⛔ **Security Lockout**: 5 failed passkey attempts on '{pending_prefix}'. You are locked out for 1 hour.")
                 context.user_data.pop('pending_unlock_group_id', None)
                 context.user_data.pop('pending_unlock_prefix', None)
             else:
                 remaining = 5 - fails
-                await notify_admin(context, f"🛡️ SECURITY: Unauthorized key attempt on `{pending_prefix}` by `{user.id}` (Fail {fails}/5).")
                 await context.bot.send_message(chat_id, f"❌ Incorrect key for '{pending_prefix}'. {remaining} attempt(s) remaining before 1-hour lockout.")
         return
 

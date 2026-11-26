@@ -41,7 +41,7 @@ def test_auth_pin_lifecycle():
     res = verify_auth_pin(pin)
     assert res is not None
     assert res["user_id"] == user_id
-    assert res["username"] == username
+    assert res["username"] == ""
 
     # 3. One-time use: verify again should return None
     assert verify_auth_pin(pin) is None

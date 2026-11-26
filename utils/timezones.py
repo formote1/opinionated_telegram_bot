@@ -6,6 +6,6 @@ try:
     tf = TimezoneFinder()
     logger.info("TimezoneFinder initialized.")
 except Exception as e:
-    logger.warning(f"TimezoneFinder not available, falling back to default timezone: {e}")
+    logger.warning("TimezoneFinder not available, falling back to default timezone: %s", type(e).__name__)
     tf = None
 

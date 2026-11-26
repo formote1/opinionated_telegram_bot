@@ -42,7 +42,7 @@ def test_login_and_logout_routes(client):
     # Verify session established
     with client.session_transaction() as sess:
         assert sess.get("user_id") == 12345
-        assert sess.get("username") == "alice"
+        assert sess.get("public_id", "").startswith("U1_")
 
     # Test logout
     logout_res = client.get("/logout", follow_redirects=False)
@@ -73,8 +73,8 @@ def test_api_auth_me(client):
     res2 = client.get("/api/auth/me")
     data2 = res2.get_json()
     assert data2["authenticated"] is True
-    assert data2["user"]["user_id"] == 777
-    assert data2["user"]["username"] == "bob"
+    assert data2["user"]["public_id"].startswith("U1_")
+    assert "username" not in data2["user"]
 
 
 def test_api_auth_token(client):
@@ -83,7 +83,7 @@ def test_api_auth_token(client):
     assert res.status_code == 200
     data = res.get_json()
     assert data["success"] is True
-    assert data["user"]["user_id"] == 888
+    assert data["user"]["public_id"].startswith("U1_")
 
     # Bad token
     bad_res = client.post("/api/auth/token", json={"token": "invalid.token"})
@@ -385,8 +385,8 @@ def test_bearer_token_authentication(client):
     assert res.status_code == 200
     data = res.get_json()
     assert data["authenticated"] is True
-    assert data["user"]["user_id"] == 555
-    assert data["user"]["username"] == "bearertester"
+    assert data["user"]["public_id"].startswith("U1_")
+    assert "username" not in data["user"]
 
     # Verify protected /api/reminders accepts Bearer header
     with patch("server.reminders_col") as mock_reminders:
@@ -499,7 +499,7 @@ def test_api_admin_user_action_with_username(client):
         assert res.status_code == 200
         data = res.get_json()
         assert data["success"] is True
-        assert "Banned user 888888" in data["message"]
+        assert "Banned user U1_" in data["message"]
         mock_resolve.assert_awaited_once()
 
 
@@ -535,6 +535,7 @@ def test_api_admin_keys_with_zero_codes(client):
         assert "GHOST" in prefixes
         ghost_item = next(k for k in data["keys"] if k["prefix"] == "GHOST")
         assert ghost_item["name"] == "Ghost Series"
-        assert ghost_item["secret_key"] == "pass123"
+        assert "secret_key" not in ghost_item
+        assert ghost_item["is_locked"] is True
         assert ghost_item["count"] == 0
 

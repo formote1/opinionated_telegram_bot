@@ -146,11 +146,9 @@ async def test_save_user_info_no_pii_stored():
         update_dict = call_args[0][1]
 
         assert filter_dict == {"user_id": 77777}
-        # Only anonymous user presence ($setOnInsert with user_id)
-        assert "$setOnInsert" in update_dict
+        # Only an anonymous presence record and its pseudonym are stored
         assert update_dict["$setOnInsert"] == {"user_id": 77777}
-        # Strictly ensure no first_name, last_name, or last_seen
-        assert "$set" not in update_dict
+        assert update_dict["$set"]["public_id"].startswith("U1_")
         update_str = json.dumps(update_dict)
         assert "first_name" not in update_str
         assert "last_name" not in update_str
@@ -226,9 +224,10 @@ async def test_retained_user_caching_web_sessions_no_logs_insert():
     # Verifies user companion web token caching functions without writing to logs_col
     with patch("database.web_sessions_col") as mock_sessions:
         mock_sessions.update_one = AsyncMock()
-        session_data = await save_web_session("test-token-123", 55555, "caching_user")
-        assert session_data["token"] == "test-token-123"
+        session_data = await save_web_session("test-token-123", 55555)
+        assert session_data["token_hash"] == "19b6b086eebb807f54e6327309dec0ff347a6c3c30bf3bb396f167513eba3475"
         assert session_data["user_id"] == 55555
+        assert "username" not in session_data
         assert mock_sessions.update_one.awaited
 
 

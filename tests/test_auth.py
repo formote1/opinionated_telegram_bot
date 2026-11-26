@@ -21,7 +21,8 @@ def test_auth_token_roundtrip():
     info = verify_auth_token(token)
     assert info is not None
     assert info["user_id"] == user_id
-    assert info["username"] == username
+    assert info["username"] == ""
+    assert info["public_id"].startswith("U1_")
     assert info["is_admin"] == (ADMIN_ID and user_id == ADMIN_ID)
 
 
@@ -96,5 +97,6 @@ def test_auth_token_username_with_colons():
     info = verify_auth_token(token)
     assert info is not None
     assert info["user_id"] == user_id
-    assert info["username"] == username
+    assert info["username"] == ""
+    assert info["public_id"].startswith("U1_")
 

@@ -1,3 +1,4 @@
+import hashlib
 from datetime import date, datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1291,7 +1292,7 @@ async def test_daily_reminder_past_due_birthday_never_deleted_and_preserves_date
     }
 
     with patch("handlers.reminders.reminders_col") as mock_col, \
-         patch("handlers.reminders.notify_admin", AsyncMock()):
+         patch("handlers.reminders.notify_admin", AsyncMock(), create=True):
         mock_col.find.return_value.to_list = AsyncMock(return_value=[bday_doc])
         mock_col.delete_one = AsyncMock()
         mock_col.update_one = AsyncMock()
@@ -1669,58 +1670,55 @@ async def test_persistent_web_auth_session_mongodb_lifecycle():
 
     class MockWebSessionsCol:
         async def update_one(self, filter_query, update_doc, upsert=False):
-            token = filter_query.get("token")
+            token_hash = filter_query.get("token_hash")
             data = update_doc.get("$set", {})
-            fake_sessions_db[token] = dict(data)
-            return MagicMock(modified_count=1, upserted_id=token)
+            fake_sessions_db[token_hash] = dict(data)
+            return MagicMock(modified_count=1, upserted_id=token_hash)
 
         async def find_one(self, filter_query):
-            token = filter_query.get("token")
-            return fake_sessions_db.get(token)
+            return fake_sessions_db.get(filter_query.get("token_hash"))
 
         async def delete_one(self, filter_query):
-            token = filter_query.get("token")
-            existed = token in fake_sessions_db
-            fake_sessions_db.pop(token, None)
+            token_hash = filter_query.get("token_hash")
+            existed = token_hash in fake_sessions_db
+            fake_sessions_db.pop(token_hash, None)
             return MagicMock(deleted_count=1 if existed else 0)
 
     mock_col = MockWebSessionsCol()
     with patch("database.web_sessions_col", mock_col):
-        # 1. Save session (30 days validity)
         token = "test-persistent-token-xyz.12345"
-        saved = await save_web_session(token, 445566, "persist_user", expires_in=86400 * 30)
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        saved = await save_web_session(token, 445566, expires_in=86400 * 30)
         assert saved["user_id"] == 445566
-        assert saved["username"] == "persist_user"
-        assert token in fake_sessions_db
-        assert "expires_at" in fake_sessions_db[token]
+        assert saved["public_id"].startswith("U1_")
+        assert "username" not in saved
+        assert token_hash in fake_sessions_db
+        assert "expires_at" in fake_sessions_db[token_hash]
 
-        # 2. Get active session
         session_info = await get_web_session(token)
         assert session_info is not None
         assert session_info["user_id"] == 445566
-        assert session_info["username"] == "persist_user"
+        assert session_info["username"] == ""
 
-        # 3. Expired session returns None and cleans up
-        fake_sessions_db[token]["expires_at"] = "2020-01-01T00:00:00+00:00"
-        expired_info = await get_web_session(token)
-        assert expired_info is None
-        assert token not in fake_sessions_db
+        fake_sessions_db[token_hash]["expires_at"] = "2020-01-01T00:00:00+00:00"
+        assert await get_web_session(token) is None
+        assert token_hash not in fake_sessions_db
 
-        # 4. Delete session upon logout
         token2 = "test-token-2.67890"
-        await save_web_session(token2, 7788, "user2")
-        assert token2 in fake_sessions_db
-        deleted = await delete_web_session(token2)
-        assert deleted is True
-        assert token2 not in fake_sessions_db
+        await save_web_session(token2, 7788)
+        hash2 = hashlib.sha256(token2.encode()).hexdigest()
+        assert hash2 in fake_sessions_db
+        assert await delete_web_session(token2) is True
+        assert hash2 not in fake_sessions_db
 
 
 def test_server_persistent_web_session_across_restarts(client):
     persistent_token = "persistent-stored-session-token-999.sig"
+    token_hash = hashlib.sha256(persistent_token.encode()).hexdigest()
     session_doc = {
-        "token": persistent_token,
+        "token_hash": token_hash,
         "user_id": 99999,
-        "username": "persisted_dashboard_user",
+        "public_id": "U1_9520cc36245f",
         "is_admin": False,
         "created_at": "2026-11-15T00:00:00+00:00",
         "expires_at": "2026-12-15T00:00:00+00:00",
@@ -1737,22 +1735,22 @@ def test_server_persistent_web_session_across_restarts(client):
         assert res.status_code == 200
         data = res.get_json()
         assert data["authenticated"] is True
-        assert data["user"]["user_id"] == 99999
-        assert data["user"]["username"] == "persisted_dashboard_user"
+        assert data["user"]["public_id"].startswith("U1_")
+        assert "user_id" not in data["user"]
 
         # 2. POST /api/auth/token with persistent token restores session
         res_post = client.post("/api/auth/token", json={"token": persistent_token})
         assert res_post.status_code == 200
         post_data = res_post.get_json()
         assert post_data["success"] is True
-        assert post_data["user"]["user_id"] == 99999
+        assert post_data["user"]["public_id"].startswith("U1_")
         mock_col.update_one.assert_awaited()
 
         # 3. Logout cleans up persistent session
         mock_col.delete_one = AsyncMock(return_value=MagicMock(deleted_count=1))
         res_logout = client.post("/api/auth/logout", headers={"Authorization": f"Bearer {persistent_token}"})
         assert res_logout.status_code == 200
-        mock_col.delete_one.assert_awaited_with({"token": persistent_token})
+        mock_col.delete_one.assert_awaited_with({"token_hash": token_hash})
 
         # 4. Session cookie logout also cleans up persistent session
         mock_col.delete_one.reset_mock()
@@ -1761,7 +1759,7 @@ def test_server_persistent_web_session_across_restarts(client):
             sess["token"] = persistent_token
         res_cookie_logout = client.post("/api/auth/logout")
         assert res_cookie_logout.status_code == 200
-        mock_col.delete_one.assert_awaited_with({"token": persistent_token})
+        mock_col.delete_one.assert_awaited_with({"token_hash": token_hash})
 
 
 def test_format_relative_countdown_extra_edge_cases():

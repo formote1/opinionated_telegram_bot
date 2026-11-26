@@ -57,6 +57,7 @@ from utils.auth import (
     verify_auth_token,
     verify_telegram_init_data,
 )
+from utils.privacy import ensure_user_alias, flask_secret_key, public_id
 from utils.sentinel import log_event
 
 # Silence per-request werkzeug stdout logging to improve throughput
@@ -70,7 +71,7 @@ flask_app = Flask(
     template_folder=TEMPLATE_DIR,
     static_folder=STATIC_DIR
 )
-flask_app.secret_key = os.getenv("SECRET_KEY", TOKEN or "opinionated-bot-secure-session-key-32bytes")
+flask_app.secret_key = flask_secret_key()
 is_https = bool(os.getenv("RENDER_EXTERNAL_URL", "").startswith("https://"))
 flask_app.config["SESSION_COOKIE_HTTPONLY"] = True
 flask_app.config["SESSION_COOKIE_SAMESITE"] = "None" if is_https else "Lax"
@@ -154,7 +155,7 @@ def get_current_user():
     """
     Retrieves authenticated user from token (Authorization / X-Auth-Token / initData)
     or session cookie.
-    Returns dict {"user_id": int, "username": str, "is_admin": bool} or None.
+    Returns dict {"user_id": int, "public_id": str, "is_admin": bool} or None.
     """
     # 1. Authorization header: Bearer <token>
     auth_hdr = request.headers.get("Authorization", "").strip()
@@ -167,10 +168,6 @@ def get_current_user():
     # 2. X-Auth-Token header
     if not token:
         token = request.headers.get("X-Auth-Token", "").strip() or None
-
-    # 3. Query parameter token
-    if not token:
-        token = request.args.get("token", "").strip() or None
 
     if token:
         if web_sessions_col is not None:
@@ -196,7 +193,8 @@ def get_current_user():
     if uid:
         return {
             "user_id": uid,
-            "username": session.get("username", ""),
+            "public_id": session.get("public_id") or public_id(uid),
+            "username": "",
             "is_admin": bool(ADMIN_ID and uid == ADMIN_ID)
         }
 
@@ -262,13 +260,14 @@ def web_login():
         return redirect('/?auth=invalid' if (token or pin) else '/?auth=missing')
 
     session['user_id'] = user_info['user_id']
-    session['username'] = user_info['username']
+    session['public_id'] = public_id(user_info['user_id'])
     session['is_admin'] = user_info['is_admin']
-    effective_token = token if (token and '.' in token) else generate_auth_token(user_info['user_id'], user_info['username'])
+    run_async(ensure_user_alias(user_info['user_id']))
+    effective_token = token if (token and '.' in token) else generate_auth_token(user_info['user_id'])
     session['token'] = effective_token
     if web_sessions_col is not None:
         try:
-            run_async(save_web_session(effective_token, user_info['user_id'], user_info['username']))
+            run_async(save_web_session(effective_token, user_info['user_id']))
         except Exception:
             pass
     return redirect(f'/?auth=success&token={effective_token}')
@@ -303,7 +302,7 @@ if TOKEN:
                             _main_loop
                         )
             except Exception as e:
-                logger.error(f"Webhook processing error: {e}")
+                logger.error("Webhook processing error: %s", type(e).__name__)
         return "OK"
 
 
@@ -342,8 +341,7 @@ def api_auth_me():
     return jsonify({
         "authenticated": True,
         "user": {
-            "user_id": user_id,
-            "username": user.get('username', ''),
+            "public_id": user.get('public_id') or public_id(user_id),
             "is_admin": bool(ADMIN_ID and user_id == ADMIN_ID)
         }
     })
@@ -424,15 +422,16 @@ def api_auth_token():
         return jsonify({"success": False, "error": "Invalid or expired credentials."}), 401
 
     session['user_id'] = user_info['user_id']
-    session['username'] = user_info['username']
+    session['public_id'] = public_id(user_info['user_id'])
     session['is_admin'] = user_info['is_admin']
+    run_async(ensure_user_alias(user_info['user_id']))
 
     # Always provide an active companion token for Bearer authentication
-    issued_token = token_to_verify if (token_to_verify and "." in token_to_verify) else generate_auth_token(user_info['user_id'], user_info['username'])
+    issued_token = token_to_verify if (token_to_verify and "." in token_to_verify) else generate_auth_token(user_info['user_id'])
     session['token'] = issued_token
     if web_sessions_col is not None:
         try:
-            run_async(save_web_session(issued_token, user_info['user_id'], user_info['username']))
+            run_async(save_web_session(issued_token, user_info['user_id']))
         except Exception:
             pass
 
@@ -440,8 +439,7 @@ def api_auth_token():
         "success": True,
         "token": issued_token,
         "user": {
-            "user_id": user_info['user_id'],
-            "username": user_info['username'],
+            "public_id": public_id(user_info['user_id']),
             "is_admin": user_info['is_admin']
         }
     })
@@ -556,7 +554,7 @@ def api_reminders_list():
         reminders = run_async(_fetch())
         return jsonify({"success": True, "reminders": reminders})
     except Exception as e:
-        logger.error(f"Error fetching reminders: {e}")
+        logger.error("Error fetching reminders: %s", type(e).__name__)
         return jsonify({"success": False, "error": "Failed to fetch reminders."}), 500
 
 
@@ -684,7 +682,7 @@ def api_reminders_create():
         out_doc["status"] = "today" if d_left == 0 else ("past_due" if d_left < 0 else ("urgent" if d_left <= 3 else "active"))
         return jsonify({"success": True, "reminder": out_doc})
     except Exception as e:
-        logger.error(f"Error creating reminder: {e}")
+        logger.error("Error creating reminder: %s", type(e).__name__)
         return jsonify({"success": False, "error": "Failed to create reminder."}), 500
 
 
@@ -735,7 +733,7 @@ def api_reminders_snooze(reminder_id):
             "concise_date": format_concise_date(result)
         })
     except Exception as e:
-        logger.error(f"Error snoozing reminder: {e}")
+        logger.error("Error snoozing reminder: %s", type(e).__name__)
         return jsonify({"success": False, "error": "Failed to snooze reminder."}), 500
 
 
@@ -777,7 +775,7 @@ def api_reminders_trigger(reminder_id):
             return jsonify({"success": False, "error": "Database unavailable."}), 503
         return jsonify({"success": True, "message": "Reminder sent on the spot!"})
     except Exception as e:
-        logger.error(f"Error triggering reminder: {e}")
+        logger.error("Error triggering reminder: %s", type(e).__name__)
         return jsonify({"success": False, "error": "Failed to trigger reminder."}), 500
 
 
@@ -833,7 +831,7 @@ def api_reminders_done(reminder_id):
                 remaining = await reminders_col.count_documents({"user_id": user_id})
                 if remaining == 0:
                     for job in _application.job_queue.jobs():
-                        if job.name and job.name.startswith(f"user_rem_{user_id}_"):
+                        if job.name and job.name.startswith(f"user_rem_{public_id(user_id)}_"):
                             job.schedule_removal()
             return {"action": "completed"}
 
@@ -845,7 +843,7 @@ def api_reminders_done(reminder_id):
             return jsonify({"success": False, "error": "Reminder not found."}), 404
         return jsonify({"success": True, **result})
     except Exception as e:
-        logger.error(f"Error marking reminder done: {e}")
+        logger.error("Error marking reminder done: %s", type(e).__name__)
         return jsonify({"success": False, "error": "Failed to complete reminder."}), 500
 
 
@@ -874,7 +872,7 @@ def api_reminders_delete(reminder_id):
             remaining = await reminders_col.count_documents({"user_id": user_id})
             if remaining == 0:
                 for job in _application.job_queue.jobs():
-                    if job.name and job.name.startswith(f"user_rem_{user_id}_"):
+                    if job.name and job.name.startswith(f"user_rem_{public_id(user_id)}_"):
                         job.schedule_removal()
         return "deleted"
 
@@ -886,7 +884,7 @@ def api_reminders_delete(reminder_id):
             return jsonify({"success": False, "error": "Reminder not found."}), 404
         return jsonify({"success": True})
     except Exception as e:
-        logger.error(f"Error deleting reminder: {e}")
+        logger.error("Error deleting reminder: %s", type(e).__name__)
         return jsonify({"success": False, "error": "Failed to delete reminder."}), 500
 
 
@@ -1045,7 +1043,7 @@ def api_reminders_update(reminder_id):
 
         return jsonify({"success": True, "reminder": updated_doc})
     except Exception as e:
-        logger.error(f"Error updating reminder: {e}")
+        logger.error("Error updating reminder: %s", type(e).__name__)
         return jsonify({"success": False, "error": "Failed to update reminder."}), 500
 
 
@@ -1172,7 +1170,7 @@ def api_media_items():
         items = run_async(_fetch())
         return jsonify({"success": True, "items": items})
     except Exception as e:
-        logger.error(f"Error fetching media items: {e}")
+        logger.error("Error fetching media items: %s", type(e).__name__)
         return jsonify({"success": False, "error": "Failed to fetch media catalog."}), 500
 
 
@@ -1248,7 +1246,7 @@ def api_media_item_detail(prefix):
             return jsonify({"success": False, "error": f"Item '{prefix}' not found."}), 404
         return jsonify({"success": True, "item": item})
     except Exception as e:
-        logger.error(f"Error fetching item detail: {e}")
+        logger.error("Error fetching item detail: %s", type(e).__name__)
         return jsonify({"success": False, "error": "Failed to fetch item."}), 500
 
 
@@ -1319,7 +1317,7 @@ def api_media_unlock():
             return jsonify({"success": False, "error": f"Incorrect passkey. (Attempt {fails}/5)"}), 400
         return jsonify({"success": True, "message": f"Partition '{prefix}' unlocked successfully!"})
     except Exception as e:
-        logger.error(f"Error unlocking partition: {e}")
+        logger.error("Error unlocking partition: %s", type(e).__name__)
         return jsonify({"success": False, "error": "Passkey check failed."}), 500
 
 
@@ -1415,7 +1413,7 @@ def api_media_deliver():
             "message": f"Media '{code}' delivered to your Telegram chat!"
         })
     except Exception as e:
-        logger.error(f"Media delivery error: {e}")
+        logger.error("Media delivery error: %s", type(e).__name__)
         return jsonify({"success": False, "error": f"Delivery error: {e}"}), 500
 
 
@@ -1458,7 +1456,7 @@ def api_admin_stats():
         stats = run_async(_fetch())
         return jsonify({"success": True, "stats": stats})
     except Exception as e:
-        logger.error(f"Admin stats error: {e}")
+        logger.error("Admin stats error: %s", type(e).__name__)
         return jsonify({"success": False, "error": "Failed to retrieve stats."}), 500
 
 
@@ -1527,7 +1525,6 @@ def api_admin_keys():
                 "chat_id": chat_id,
                 "count": count,
                 "name": (label_doc.get("name") or label_doc.get("label") or "Unlabeled") if label_doc else "Unlabeled",
-                "secret_key": key_record.get("secret_key") if key_record else None,
                 "is_locked": bool(key_record)
             })
         return matrix
@@ -1536,7 +1533,7 @@ def api_admin_keys():
         keys = run_async(_fetch())
         return jsonify({"success": True, "keys": keys})
     except Exception as e:
-        logger.error(f"Key matrix error: {e}")
+        logger.error("Key matrix error: %s", type(e).__name__)
         return jsonify({"success": False, "error": "Failed to fetch key matrix."}), 500
 
 
@@ -1548,19 +1545,11 @@ def api_admin_access():
         if unlocked_groups_col is None:
             return []
         users_access = await unlocked_groups_col.find({}).to_list(length=100)
-        u_ids = [u.get("user_id") for u in users_access if u.get("user_id")]
-
-        users_map = {}
-        if users_col is not None and u_ids:
-            async for u_doc in users_col.find({"user_id": {"$in": u_ids}}):
-                users_map[u_doc["user_id"]] = u_doc
 
         now = time.time()
         matrix = []
         for u in users_access:
             u_id = u.get("user_id")
-            u_info = users_map.get(u_id)
-            uname = f"@{u_info.get('username')}" if u_info and u_info.get('username') else f"User {u_id}"
 
             unlocked = u.get("unlocked_prefixes", [])
             frozen = u.get("frozen_prefixes", [])
@@ -1584,8 +1573,7 @@ def api_admin_access():
                 })
 
             matrix.append({
-                "user_id": u_id,
-                "username": uname,
+                "public_id": public_id(u_id) if u_id else "U1_unknown",
                 "is_banned": bool(u.get("is_banned")),
                 "prefixes": prefixes_data
             })
@@ -1595,7 +1583,7 @@ def api_admin_access():
         access_list = run_async(_fetch())
         return jsonify({"success": True, "access": access_list})
     except Exception as e:
-        logger.error(f"Access matrix error: {e}")
+        logger.error("Access matrix error: %s", type(e).__name__)
         return jsonify({"success": False, "error": "Failed to fetch access matrix."}), 500
 
 
@@ -1632,9 +1620,8 @@ def api_admin_user_action(action):
         if unlocked_groups_col is None:
             return "db_unavailable"
 
-        # Resolve username or numeric ID
-        target_lookup = target_str if (target_str.isdigit() or target_str.startswith("@")) else f"@{target_str}"
-        target_res = await resolve_target_user(target_lookup)
+        # Resolve pseudonym (legacy numeric IDs remain accepted but are never returned)
+        target_res = await resolve_target_user(target_str)
         resolved_uid = target_res[0] if isinstance(target_res, tuple) else target_res
         if not resolved_uid:
             try:
@@ -1647,12 +1634,12 @@ def api_admin_user_action(action):
         if action == "ban":
             await unlocked_groups_col.update_one({"user_id": user_id}, {"$set": {"is_banned": True}}, upsert=True)
             await log_event(user_id, "", "Banned via Web Admin")
-            return f"Banned user {user_id}"
+            return f"Banned user {public_id(user_id)}"
 
         if action == "unban":
             await unlocked_groups_col.update_one({"user_id": user_id}, {"$set": {"is_banned": False}}, upsert=True)
             await log_event(user_id, "", "Unbanned via Web Admin")
-            return f"Unbanned user {user_id}"
+            return f"Unbanned user {public_id(user_id)}"
 
         # Resolve target keys
         if prefix == "0":
@@ -1686,7 +1673,7 @@ def api_admin_user_action(action):
                 update_op["$unset"] = unsets
             await unlocked_groups_col.update_one({"user_id": user_id}, update_op, upsert=True)
             await log_event(user_id, "", f"Granted {prefix} via Web Admin")
-            return f"Granted {prefix} to user {user_id}"
+            return f"Granted {prefix} to user {public_id(user_id)}"
 
         elif action == "revoke":
             unsets = {f"prefix_expirations.{k}": "" for k in keys_to_target}
@@ -1701,7 +1688,7 @@ def api_admin_user_action(action):
                 }
             )
             await log_event(user_id, "", f"Revoked {prefix} via Web Admin")
-            return f"Revoked {prefix} from user {user_id}"
+            return f"Revoked {prefix} from user {public_id(user_id)}"
 
         elif action == "freeze":
             expires_at = parse_duration(duration_str) if duration_str else None
@@ -1714,7 +1701,7 @@ def api_admin_user_action(action):
                 update_op["$set"] = exp_dict
             await unlocked_groups_col.update_one({"user_id": user_id}, update_op, upsert=True)
             await log_event(user_id, "", f"Froze {prefix} via Web Admin")
-            return f"Froze {prefix} for user {user_id}"
+            return f"Froze {prefix} for user {public_id(user_id)}"
 
         elif action == "unfreeze":
             await unlocked_groups_col.update_one(
@@ -1725,7 +1712,7 @@ def api_admin_user_action(action):
                 }
             )
             await log_event(user_id, "", f"Unfroze {prefix} via Web Admin")
-            return f"Unfroze {prefix} for user {user_id}"
+            return f"Unfroze {prefix} for user {public_id(user_id)}"
 
         return "unknown"
 
@@ -1734,12 +1721,12 @@ def api_admin_user_action(action):
         if result == "db_unavailable":
             return jsonify({"success": False, "error": "Database unavailable."}), 500
         if result == "user_not_found":
-            return jsonify({"success": False, "error": f"Target user '{user_id_raw}' could not be resolved."}), 404
+            return jsonify({"success": False, "error": "Target user could not be resolved."}), 404
         if result == "no_keys":
             return jsonify({"success": False, "error": "No matching partition keys found."}), 404
         return jsonify({"success": True, "message": result})
     except Exception as e:
-        logger.error(f"User admin action error: {e}")
+        logger.error("User admin action error: %s", type(e).__name__)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -1808,7 +1795,7 @@ def api_admin_file_lock():
         msg = f"Locked all {count} unlocked partition(s) with passkey." if prefix == "0" else f"Partition '{prefix}' locked with passkey."
         return jsonify({"success": True, "message": msg})
     except Exception as e:
-        logger.error(f"Admin lock error: {e}")
+        logger.error("Admin lock error: %s", type(e).__name__)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -1834,7 +1821,7 @@ def api_admin_file_unlock():
         run_async(_unlock())
         return jsonify({"success": True, "message": f"Partition '{prefix}' unlocked."})
     except Exception as e:
-        logger.error(f"Admin unlock error: {e}")
+        logger.error("Admin unlock error: %s", type(e).__name__)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -1887,7 +1874,7 @@ def api_admin_file_change_passkey():
             return jsonify({"success": False, "error": "Current passkey does not match."}), 400
         return jsonify({"success": True, "message": f"Passkey updated for {count} partition(s)."})
     except Exception as e:
-        logger.error(f"Change passkey error: {e}")
+        logger.error("Change passkey error: %s", type(e).__name__)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -1937,7 +1924,7 @@ def api_admin_file_mv():
             return jsonify({"success": False, "error": "Database unavailable."}), 500
         return jsonify({"success": True, "message": f"Successfully migrated {count} items from {old_pfx} to {new_pfx}."})
     except Exception as e:
-        logger.error(f"Move prefix error: {e}")
+        logger.error("Move prefix error: %s", type(e).__name__)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -1988,7 +1975,7 @@ def api_admin_file_del():
             return jsonify({"success": False, "error": "Start and end must be integers."}), 400
         return jsonify({"success": True, "message": f"Deleted {count} asset(s)."})
     except Exception as e:
-        logger.error(f"Admin del error: {e}")
+        logger.error("Admin del error: %s", type(e).__name__)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -2021,7 +2008,7 @@ def api_admin_media_label_set():
         run_async(_set())
         return jsonify({"success": True, "message": f"Label set for {prefix}: {title} [{category}]."})
     except Exception as e:
-        logger.error(f"Set label error: {e}")
+        logger.error("Set label error: %s", type(e).__name__)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -2047,7 +2034,7 @@ def api_admin_media_label_del():
             return jsonify({"success": False, "error": f"No label found for {prefix}."}), 404
         return jsonify({"success": True, "message": f"Label for {prefix} removed."})
     except Exception as e:
-        logger.error(f"Del label error: {e}")
+        logger.error("Del label error: %s", type(e).__name__)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -2088,7 +2075,7 @@ def api_admin_media_tmdb_set():
             return jsonify({"success": False, "error": f"No TMDB matches found for '{query}'."}), 404
         return jsonify({"success": True, "message": f"Linked TMDB: {data.get('title')}", "tmdb": data})
     except Exception as e:
-        logger.error(f"Set TMDB error: {e}")
+        logger.error("Set TMDB error: %s", type(e).__name__)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -2114,7 +2101,7 @@ def api_admin_media_tmdb_del():
             return jsonify({"success": False, "error": f"No TMDB metadata linked to {prefix}."}), 404
         return jsonify({"success": True, "message": f"TMDB metadata unlinked from {prefix}."})
     except Exception as e:
-        logger.error(f"Del TMDB error: {e}")
+        logger.error("Del TMDB error: %s", type(e).__name__)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -2171,7 +2158,7 @@ def api_admin_media_banner():
         msg = f"Banner mode set to {val.upper()}." if status == "toggled" else ("Custom banner set." if status == "set" else "Custom banner reset to TMDB.")
         return jsonify({"success": True, "message": msg})
     except Exception as e:
-        logger.error(f"Banner action error: {e}")
+        logger.error("Banner action error: %s", type(e).__name__)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -2213,7 +2200,7 @@ def api_admin_media_season_set():
         run_async(_set())
         return jsonify({"success": True, "message": f"Season {sn_num} ({start}-{end}) mapped for {prefix}."})
     except Exception as e:
-        logger.error(f"Season set error: {e}")
+        logger.error("Season set error: %s", type(e).__name__)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -2245,7 +2232,7 @@ def api_admin_media_season_del():
             return jsonify({"success": False, "error": f"Season {sn_num} not found for {prefix}."}), 404
         return jsonify({"success": True, "message": f"Season {sn_num} deleted for {prefix}."})
     except Exception as e:
-        logger.error(f"Season del error: {e}")
+        logger.error("Season del error: %s", type(e).__name__)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -2269,7 +2256,7 @@ def api_admin_media_season_clear():
         run_async(_clear())
         return jsonify({"success": True, "message": f"All mapped seasons cleared for {prefix}."})
     except Exception as e:
-        logger.error(f"Season clear error: {e}")
+        logger.error("Season clear error: %s", type(e).__name__)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -2304,7 +2291,7 @@ def api_admin_media_refresh():
         count = run_async(_refresh())
         return jsonify({"success": True, "message": f"Successfully refreshed metadata for {count} titles."})
     except Exception as e:
-        logger.error(f"Metadata refresh error: {e}")
+        logger.error("Metadata refresh error: %s", type(e).__name__)
         return jsonify({"success": False, "error": str(e)}), 500
 
 

@@ -25,7 +25,7 @@ from telegram.ext import (
 
 from config import logger
 from database import reminders_col
-from utils.sentinel import notify_admin
+from utils.privacy import ensure_user_alias, public_id
 from utils.timezones import tf
 
 # Conversation States
@@ -387,7 +387,7 @@ def schedule_reminder_job(app, reminder_data):
         except Exception:
             tz = pytz.UTC
         reminder_time = time(hour=hour, minute=minute, tzinfo=tz)
-        job_name = f"user_rem_{user_id}_{hour:02d}{minute:02d}"
+        job_name = f"user_rem_{public_id(user_id)}_{hour:02d}{minute:02d}"
 
         # Clean up legacy per-reminder job if exists
         if '_id' in reminder_data:
@@ -412,7 +412,7 @@ def schedule_reminder_job(app, reminder_data):
         )
 
     except Exception as e:
-        logger.error(f"Scheduling error: {e}")
+        logger.error("Scheduling error: %s", type(e).__name__)
 
 
 async def send_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
@@ -433,7 +433,7 @@ async def send_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
 
     lock_key = (user_id, today_str)
     if lock_key in _active_reminder_dispatches:
-        logger.info(f"Reminders for user {user_id} already being dispatched today ({today_str}).")
+        logger.info("Duplicate daily reminder dispatch skipped")
         return
     _active_reminder_dispatches.add(lock_key)
 
@@ -564,7 +564,6 @@ async def send_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=None,
                 parse_mode="HTML"
             )
-            await notify_admin(context, f"🎂 Birthday Reminders sent to `{user_id}` ({len(birthday_items)} birthdays).")
 
         # --- B. Deliver Other Reminders Segregated by Category ---
         category_icons = {
@@ -623,11 +622,9 @@ async def send_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup(kb_rows) if kb_rows else None,
                 parse_mode="HTML"
             )
-            await notify_admin(context, f"🔔 Reminders [{cat}] sent to `{user_id}` ({len(items)} items).")
 
     except Exception as e:
-        logger.error(f"Reminder delivery error: {e}")
-        await notify_admin(context, f"🔴 REMINDER FAILURE for User `{user_id}`: {e}")
+        logger.error("Reminder delivery error: %s", type(e).__name__)
     finally:
         _active_reminder_dispatches.discard(lock_key)
 
@@ -739,7 +736,7 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="HTML"
                 )
     except Exception as e:
-        logger.error(f"List error: {e}")
+        logger.error("List error: %s", type(e).__name__)
         await update.effective_message.reply_text("❌ Failed to list reminders.")
 
 
@@ -761,7 +758,7 @@ async def handle_reminder_callback(update: Update, context: ContextTypes.DEFAULT
                 await send_instant_reminder_dispatch(context.bot, rec, user_id)
                 return await query.answer("⚡ Sent reminder on the spot!")
             except Exception as e:
-                logger.error(f"Instant reminder trigger error: {e}")
+                logger.error("Instant reminder trigger error: %s", type(e).__name__)
                 return await query.answer("Error sending reminder.", show_alert=True)
         return await query.answer()
 
@@ -778,7 +775,7 @@ async def handle_reminder_callback(update: Update, context: ContextTypes.DEFAULT
                         remaining = await reminders_col.count_documents({"user_id": user_id})
                         if remaining == 0:
                             for job in context.job_queue.jobs():
-                                if job.name and job.name.startswith(f"user_rem_{user_id}_"):
+                                if job.name and job.name.startswith(f"user_rem_{public_id(user_id)}_"):
                                     job.schedule_removal()
 
                     await query.edit_message_text(
@@ -787,7 +784,6 @@ async def handle_reminder_callback(update: Update, context: ContextTypes.DEFAULT
                         parse_mode="HTML"
                     )
                     await query.answer("🗑️ Reminder deleted!", show_alert=True)
-                    await notify_admin(context, f"🔔 User `{user_id}` deleted a reminder.")
                 else:
                     await query.answer("Reminder not found or permission denied.", show_alert=True)
             except InvalidId:
@@ -829,7 +825,7 @@ async def handle_reminder_callback(update: Update, context: ContextTypes.DEFAULT
                 else:
                     return await query.answer("Reminder not found.", show_alert=True)
             except Exception as e:
-                logger.error(f"Snooze error: {e}")
+                logger.error("Snooze error: %s", type(e).__name__)
                 return await query.answer("Error processing snooze.", show_alert=True)
 
     elif data_str.startswith("remdone_"):
@@ -876,7 +872,7 @@ async def handle_reminder_callback(update: Update, context: ContextTypes.DEFAULT
                             remaining = await reminders_col.count_documents({"user_id": user_id})
                             if remaining == 0:
                                 for job in context.job_queue.jobs():
-                                    if job.name and job.name.startswith(f"user_rem_{user_id}_"):
+                                    if job.name and job.name.startswith(f"user_rem_{public_id(user_id)}_"):
                                         job.schedule_removal()
 
                         kb = query.message.reply_markup.inline_keyboard if query.message and query.message.reply_markup else []
@@ -890,7 +886,7 @@ async def handle_reminder_callback(update: Update, context: ContextTypes.DEFAULT
                 else:
                     return await query.answer("Reminder not found.", show_alert=True)
             except Exception as e:
-                logger.error(f"Mark Done error: {e}")
+                logger.error("Mark Done error: %s", type(e).__name__)
                 return await query.answer("Error completing reminder.", show_alert=True)
 
     elif data_str.startswith("editrem_"):
@@ -907,7 +903,7 @@ async def handle_reminder_callback(update: Update, context: ContextTypes.DEFAULT
                 await query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
                 return await query.answer()
             except Exception as e:
-                logger.error(f"Edit menu error: {e}")
+                logger.error("Edit menu error: %s", type(e).__name__)
                 return await query.answer("Error opening edit menu.", show_alert=True)
 
     elif data_str.startswith("edfield_"):
@@ -932,7 +928,7 @@ async def handle_reminder_callback(update: Update, context: ContextTypes.DEFAULT
                         await query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
                         return await query.answer("✦ Set as spotlight birthday!")
                 except Exception as e:
-                    logger.error(f"Spotlight on error: {e}")
+                    logger.error("Spotlight on error: %s", type(e).__name__)
             return await query.answer("Failed to update spotlight.", show_alert=True)
 
         elif field == "spotlight_off":
@@ -947,7 +943,7 @@ async def handle_reminder_callback(update: Update, context: ContextTypes.DEFAULT
                         await query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
                         return await query.answer("Spotlight removed.")
                 except Exception as e:
-                    logger.error(f"Spotlight off error: {e}")
+                    logger.error("Spotlight off error: %s", type(e).__name__)
             return await query.answer("Failed to update spotlight.", show_alert=True)
 
         elif field == "bdate":
@@ -1179,7 +1175,7 @@ async def handle_reminder_callback(update: Update, context: ContextTypes.DEFAULT
                 await query.edit_message_text(f"✅ <b>Updated successfully!</b>\n\n{card}", reply_markup=markup, parse_mode="HTML")
                 return await query.answer("Updated!")
             except Exception as e:
-                logger.error(f"edset error: {e}")
+                logger.error("edset error: %s", type(e).__name__)
                 return await query.answer("Error updating reminder.", show_alert=True)
 
     await query.answer()
@@ -1290,7 +1286,7 @@ async def edit_reminder_command(update: Update, context: ContextTypes.DEFAULT_TY
             remaining = await reminders_col.count_documents({"user_id": user_id})
             if remaining == 0:
                 for job in context.job_queue.jobs():
-                    if job.name and job.name.startswith(f"user_rem_{user_id}_"):
+                    if job.name and job.name.startswith(f"user_rem_{public_id(user_id)}_"):
                         job.schedule_removal()
         return await update.effective_message.reply_text("🗑️ <b>Reminder deleted.</b>", parse_mode="HTML")
 
@@ -1584,6 +1580,7 @@ async def finish_reminder(message, context):
             "is_spotlight": False,
             "last_notified": ""
         }
+        await ensure_user_alias(user_id)
         res = await reminders_col.insert_one(data)
         data['_id'] = res.inserted_id
 
@@ -1610,12 +1607,11 @@ async def finish_reminder(message, context):
         else:
             await message.reply_text(success_text, parse_mode="Markdown")
 
-        await notify_admin(context, f"📅 User `{user_id}` armed a [{category}] reminder for `{data['label']}`.")
         context.user_data.clear()
         return ConversationHandler.END
 
     except Exception as e:
-        logger.error(f"Finish Error: {e}")
+        logger.error("Finish error: %s", type(e).__name__)
         context.user_data.clear()
         return ConversationHandler.END
 
